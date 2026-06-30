@@ -1,0 +1,60 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>WebGPU probe</title>
+<style>body{font:13px monospace;background:#161616;color:#ddd;margin:16px}#log{white-space:pre-wrap}</style>
+<h1>WebGPU availability probe</h1>
+<div id="log"></div>
+<script type="module">
+  const logEl = document.getElementById("log");
+  const log = (m) => { logEl.textContent += m + "\n"; console.log(m); };
+  window.__WEBGPU__ = { stage: "start" };
+  const fail = (m) => { log("FAIL: " + m); window.__WEBGPU__.ok = false; window.__WEBGPU__.error = m; document.title = "WEBGPU FAIL"; };
+
+  (async () => {
+  try {
+    if (!navigator.gpu) return fail("navigator.gpu is undefined (WebGPU not exposed)");
+    log("navigator.gpu present");
+    window.__WEBGPU__.stage = "adapter";
+
+    let adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) { log("no default adapter; trying forceFallbackAdapter"); adapter = await navigator.gpu.requestAdapter({ forceFallbackAdapter: true }); }
+    if (!adapter) return fail("requestAdapter returned null (no adapter, even fallback)");
+
+    const info = adapter.info || (adapter.requestAdapterInfo ? await adapter.requestAdapterInfo() : {});
+    log("adapter: vendor=" + (info.vendor||"?") + " architecture=" + (info.architecture||"?") + " description=" + (info.description||"?"));
+    window.__WEBGPU__.adapter = { vendor: info.vendor, architecture: info.architecture, description: info.description };
+
+    const device = await adapter.requestDevice();
+    log("device acquired; running a compute shader…");
+    window.__WEBGPU__.stage = "compute";
+
+    // Trivial compute: double four u32s in a storage buffer.
+    const module = device.createShaderModule({ code: `
+      @group(0) @binding(0) var<storage, read_write> data: array<u32>;
+      @compute @workgroup_size(4) fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+        data[gid.x] = data[gid.x] * 2u;
+      }` });
+    const N = 4, bytes = N * 4;
+    const input = new Uint32Array([1, 2, 3, 4]);
+    const storage = device.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(storage, 0, input);
+    const readback = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const pipeline = device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "main" } });
+    const bind = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: storage } }] });
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    pass.setPipeline(pipeline); pass.setBindGroup(0, bind); pass.dispatchWorkgroups(1); pass.end();
+    enc.copyBufferToBuffer(storage, 0, readback, 0, bytes);
+    device.queue.submit([enc.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    const out = Array.from(new Uint32Array(readback.getMappedRange().slice(0)));
+    readback.unmap();
+    log("compute result: [" + out.join(", ") + "]  (expected [2, 4, 6, 8])");
+
+    const ok = JSON.stringify(out) === JSON.stringify([2, 4, 6, 8]);
+    window.__WEBGPU__.ok = ok; window.__WEBGPU__.result = out; window.__WEBGPU__.stage = "done";
+    document.title = ok ? "WEBGPU OK" : "WEBGPU FAIL";
+    log(ok ? "WEBGPU OK — compute pipeline verified" : "compute result mismatch");
+  } catch (e) { fail(String(e && e.stack || e)); }
+  })();
+</script>

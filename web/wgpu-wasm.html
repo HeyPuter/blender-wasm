@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>WASM → WebGPU compute</title>
+<style>body{font:13px monospace;background:#161616;color:#ddd;margin:16px}#log{white-space:pre-wrap}</style>
+<h1>WASM → WebGPU compute (no JSPI)</h1>
+<div id="log"></div>
+<script>
+  const log = (m) => { document.getElementById("log").textContent += m + "\n"; console.log(m); };
+  window.onerror = (e) => { log("JS ERROR: " + e); document.title = "WGPU WASM FAIL"; };
+  // Mirror the wasm module's WebGPU completion flag for the verifier.
+  Object.defineProperty(window, "__RENDER_DONE__", { get: () => window.__WGPU_WASM__ });
+  var Module = { print: log, printErr: (t) => log("[err] " + t) };
+
+  // Acquire the WebGPU device in JS, hand it to wasm, THEN start the module
+  // (emscripten_webgpu_get_device() reads Module.preinitializedWebGPUDevice).
+  (async () => {
+    if (!navigator.gpu) { log("no navigator.gpu"); document.title = "WGPU WASM FAIL"; return; }
+    let adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) adapter = await navigator.gpu.requestAdapter({ forceFallbackAdapter: true });
+    if (!adapter) { log("no adapter"); document.title = "WGPU WASM FAIL"; return; }
+    Module.preinitializedWebGPUDevice = await adapter.requestDevice();
+    log("device handed to wasm; loading module…");
+    const s = document.createElement("script");
+    s.src = "wgpu_compute.js";
+    document.body.appendChild(s);
+  })();
+</script>

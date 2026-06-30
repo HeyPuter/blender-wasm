@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>WASM → WebGPU triangle</title>
+<style>body{font:13px monospace;background:#161616;color:#ddd;margin:16px}canvas{border:1px solid #444;image-rendering:pixelated}#log{white-space:pre-wrap}</style>
+<h1>WASM → WebGPU render (triangle, no JSPI)</h1>
+<canvas id="cv" width="256" height="256"></canvas>
+<div id="log"></div>
+<script>
+  const log = (m) => { document.getElementById("log").textContent += m + "\n"; console.log(m); };
+  window.onerror = (e) => { log("JS ERROR: " + e); document.title = "WGPU TRI FAIL"; };
+  Object.defineProperty(window, "__RENDER_DONE__", { get: () => window.__WGPU_WASM__ });
+  var Module = { print: log, printErr: (t) => log("[err] " + t) };
+  (async () => {
+    if (!navigator.gpu) { log("no navigator.gpu"); document.title = "WGPU TRI FAIL"; return; }
+    let adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) adapter = await navigator.gpu.requestAdapter({ forceFallbackAdapter: true });
+    Module.preinitializedWebGPUDevice = await adapter.requestDevice();
+    log("device handed to wasm; loading module…");
+    const s = document.createElement("script"); s.src = "wgpu_triangle.js"; document.body.appendChild(s);
+  })();
+</script>

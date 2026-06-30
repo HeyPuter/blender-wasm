@@ -1,0 +1,8 @@
+{
+  "name": "blender-wasm",
+  "version": "0.0.0",
+  "private": true,
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
+}

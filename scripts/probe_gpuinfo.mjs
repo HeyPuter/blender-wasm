@@ -1,0 +1,13 @@
+import { chromium } from "playwright";
+const home = process.env.HOME;
+const chromeDir = `${home}/.cache/ms-playwright/chromium-1228/chrome-linux64`;
+const env = { ...process.env, DISPLAY:":99", VK_ICD_FILENAMES:"/usr/share/vulkan/icd.d/lvp_icd.json", VK_DRIVER_FILES:"/usr/share/vulkan/icd.d/lvp_icd.json" };
+const args = ["--no-sandbox","--disable-gpu-sandbox","--enable-unsafe-webgpu","--enable-features=Vulkan","--ignore-gpu-blocklist","--use-vulkan=native","--use-webgpu-adapter=default"];
+const b = await chromium.launch({executablePath:`${chromeDir}/chrome`, headless:false, env, args});
+const p = await (await b.newContext()).newPage();
+await p.goto("chrome://gpu",{waitUntil:"load",timeout:25000});
+await new Promise(r=>setTimeout(r,2500));
+const txt = await p.evaluate(()=>document.body.innerText);
+const lines = txt.split("\n").filter(l=>/vulkan|webgpu|llvmpipe|lavapipe|swiftshader|device.?type|cpu|software/i.test(l));
+import("fs").then(fs=>fs.writeFileSync("/tmp/gpuinfo.txt",txt));console.log("WROTE",txt.length);
+await b.close(); process.exit(0);

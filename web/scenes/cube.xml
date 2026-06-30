@@ -1,0 +1,47 @@
+<!-- Minimal Cycles standalone scene: an orange diffuse cube on a ground plane,
+     lit by a point light + sky background, viewed from the front-ish. Proves
+     the CPU path tracer renders real geometry end-to-end in the browser. -->
+<cycles>
+  <!-- Single camera, positioned by the surrounding transform. Cycles cameras
+       look down -Z in their own space, so at +Z it looks back at the origin. -->
+  <transform translate="0 1 6">
+    <transform rotate="180 0 1 0">
+      <camera width="256" height="256" type="perspective" fov="0.7" />
+    </transform>
+  </transform>
+
+  <!-- World: sky-blue emissive background (ambient fill). -->
+  <background>
+    <background name="bg" strength="1.3" color="0.35, 0.5, 0.75" />
+    <connect from="bg background" to="output surface" />
+  </background>
+
+  <!-- Bright key light above/front (point lights fall off with distance²). -->
+  <light type="point" co="4 6 6" strength="6000.0" color="1.0 0.95 0.85" size="1.0" />
+
+  <shader name="cube_mat">
+    <diffuse_bsdf name="diff" color="0.85, 0.32, 0.12" />
+    <connect from="diff bsdf" to="output surface" />
+  </shader>
+
+  <shader name="floor_mat">
+    <diffuse_bsdf name="fdiff" color="0.6, 0.6, 0.6" />
+    <connect from="fdiff bsdf" to="output surface" />
+  </shader>
+
+  <!-- Cube (-1..1), rotated about Y so two faces show. -->
+  <state shader="cube_mat">
+    <transform rotate="30 0 1 0">
+      <mesh
+        nverts="4 4 4 4 4 4"
+        verts="0 1 2 3  4 7 6 5  0 4 5 1  1 5 6 2  2 6 7 3  3 7 4 0"
+        P="-1 -1 -1  1 -1 -1  1 1 -1  -1 1 -1  -1 -1 1  1 -1 1  1 1 1  -1 1 1" />
+    </transform>
+  </state>
+
+  <!-- Ground plane at y=-1. -->
+  <state shader="floor_mat">
+    <mesh nverts="4" verts="0 1 2 3"
+          P="-8 -1 -8   8 -1 -8   8 -1 8   -8 -1 8" />
+  </state>
+</cycles>

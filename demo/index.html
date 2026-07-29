@@ -130,6 +130,14 @@
       </main>
     </section>
     <canvas id="canvas" width="1536" height="864" tabindex="0"></canvas>
+    <!-- Credit badge: a sibling of #splash (NOT a child) so it keeps floating
+         over the running Blender canvas after the splash is hidden. -->
+    <div class="credit-badge">
+      <span>Brought to you by</span>
+      <a href="https://developer.puter.com" target="_blank" rel="noreferrer">Puter</a>
+      <span class="credit-sep" aria-hidden="true">|</span>
+      <a href="https://github.com/heyputer/blender-wasm" target="_blank" rel="noreferrer">GitHub</a>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

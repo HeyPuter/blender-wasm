@@ -221,55 +221,61 @@ input {
   line-height: 1.6;
 }
 
-/* --- "powered by" badge (pinned to the bottom of the viewport) ----------- */
-.powered-badge {
-  position: absolute;
-  bottom: 20px;
+/* --- credit badge (floats over BOTH the splash and the live Blender canvas) -
+   Fixed to the viewport rather than the splash, and above both of them in the
+   stack (#canvas z-index 0, #splash 10), so it stays put once Blender takes
+   over the screen. Exactly 25px tall (border-box). */
+.credit-badge {
+  position: fixed;
+  z-index: 50;
+  bottom: 14px;
   left: 50%;
   transform: translateX(-50%);
+  height: 25px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 15px;
-  border: 1px solid #e6e8ec;
+  gap: 6px;
+  padding: 0 13px;
+  border: 1px solid rgba(209, 213, 219, 0.55);
   border-radius: 999px;
-  background: #f9fafb;
+  /* Translucent + blurred so it sits legibly on the white splash and on
+     Blender's dark viewport alike. */
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
   color: #6b7280;
-  font-size: 12.5px;
+  font-size: 11.5px;
   font-weight: 500;
   line-height: 1;
-  text-decoration: none;
-  transition:
-    border-color 0.15s ease,
-    color 0.15s ease,
-    background-color 0.15s ease;
+  white-space: nowrap;
+  user-select: none;
+  /* Once Blender owns the screen the badge sits on top of its status bar, so
+     everything but the two links lets clicks/drags through to the canvas. */
+  pointer-events: none;
 }
 
-.powered-badge strong {
+.credit-badge a {
   color: #111827;
   font-weight: 600;
+  text-decoration: none;
+  transition: color 0.15s ease;
+  pointer-events: auto;
 }
 
-.powered-badge:hover {
-  border-color: #e87d0d;
-  background: rgba(232,125,13, 0.05);
+.credit-badge a:hover,
+.credit-badge a:focus-visible {
   color: #e87d0d;
 }
 
-.powered-badge:hover strong {
-  color: #e87d0d;
+.credit-badge a:focus-visible {
+  outline: 2px solid #e87d0d;
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 
-.powered-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: #e87d0d;
-}
-
-/* Hidden while launching so it doesn't overlap the startup log. */
-.stage[data-phase="console"] .powered-badge {
-  display: none;
+.credit-sep {
+  color: #9aa1ad;
+  font-weight: 400;
 }
 
 /* --- launch panel (loading / ready / console) ---------------------------- */

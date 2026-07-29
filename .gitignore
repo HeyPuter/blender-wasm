@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
 # blender-wasm .gitignore
 # Everything reproducible from `make` / the build scripts is untracked.
-# Tracked = the orchestration: Makefile, scripts/, cmake/, smoke/, web/*.html,
-# web/*.mjs, node-webgpu/*.cjs, package.json, README.md, this file.
+# Tracked = the orchestration: Makefile, scripts/, cmake/, smoke/,
+# node-webgpu/*.cjs, package.json, README.md, this file.
 # (The WebGPU backend + WASM patches live in the fork, pulled by `make blender`.)
 # NOTE: gitignore has NO inline comments — keep `#` lines separate from patterns.
 # ---------------------------------------------------------------------------
@@ -33,29 +33,16 @@
 /node-webgpu/*.ppm
 /node-webgpu/eevee_node_capture.*
 
-# web build outputs (regenerated)
-/web/blender.js
-/web/blender.wasm
-/web/blender.data
-/web/blender.js.symbols
-/web/blender_sh.js
-/web/blender_sh.wasm
-/web/blender_sh.js.symbols
-/web/blender-thumbnailer.js
-/web/blender-thumbnailer.wasm
-/web/blender_assets/
-/web/cycles.js
-/web/cycles.wasm
-/web/cycles.data
-/web/smoke.js
-/web/smoke.wasm
-/web/wgpu_compute.js
-/web/wgpu_compute.wasm
-/web/wgpu_triangle.js
-/web/wgpu_triangle.wasm
-/web/eevee_capture.png
-/web/webgpu-shot.png
-/web/verify-shot.png
+# release tarball + demo build outputs
+/blender*.tar.gz
+/demo/node_modules/
+/demo/dist/
+/demo/.stage/
+/demo/public/blender.js
+/demo/public/blender.wasm.zst
+/demo/public/assets.tar.zst
+/demo/public/manifest.json
+/demo/public/wgsl-cache.json
 
 # misc
 *.o

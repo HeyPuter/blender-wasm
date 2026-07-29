@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Blender in WebAssembly</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@100;300;400;500;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <section id="splash" aria-live="polite">
+      <header class="top-nav">
+        <div class="nav-left">
+          <a class="nav-brand-label" href="https://github.com/velzie/blender" target="_blank" rel="noreferrer">
+            Blender <span class="labs-badge">WASM</span>
+          </a>
+        </div>
+        <div class="nav-links">
+          <a class="nav-link" href="https://github.com/velzie/blender" target="_blank" rel="noreferrer" aria-label="GitHub">
+            <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor" aria-hidden="true">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+            </svg>
+          </a>
+        </div>
+      </header>
+      <main class="stage">
+        <div id="splash-shell" class="stage-inner" data-phase="loading">
+          <div class="logo-lockup">
+            <span class="logo-tile blender-tile">
+              <svg class="project-logo" viewBox="0 0 1024 1024" role="img" aria-label="Blender">
+                <g transform="translate(75, 151)" fill-rule="evenodd">
+                  <path d="M330.261615,379.121192 C333.322374,324.466765 360.060704,276.315376 400.399199,242.181648 C439.958067,208.654871 493.203725,188.163073 551.300398,188.163073 C609.339321,188.163073 662.584979,208.654871 702.172722,242.181648 C742.482342,276.315376 769.220672,324.466765 772.310306,379.063388 C775.371065,435.22074 752.819623,487.389562 713.260755,526.060965 C672.92226,565.397124 615.547464,590.079769 551.300398,590.079769 C487.053332,590.079769 429.563036,565.397124 389.253416,526.060965 C349.665673,487.389562 327.171981,435.22074 330.261615,379.121192 Z" fill="#FFFFFF"/>
+                  <path d="M257.285355,440.691838 C257.477963,451.666033 260.974535,472.991563 266.219392,489.645646 C277.242482,524.89654 295.94025,557.507695 321.957113,586.248222 C348.655511,615.789569 381.532174,639.517558 419.505533,656.36443 C459.419787,674.056612 502.667636,683.073248 547.589691,682.999552 C592.437666,682.939778 635.685515,673.745182 675.599768,655.91953 C713.573128,638.909528 746.420158,615.077729 773.074108,585.521552 C799.076155,556.662385 817.744292,523.99191 828.797014,488.741016 C834.353007,470.930194 837.864394,452.852432 839.271912,434.715351 C840.649799,416.845209 840.071975,398.945407 837.538443,381.060435 C832.589905,346.209951 820.544512,313.509815 801.994904,283.701529 C785.030605,256.310531 763.162217,232.330432 737.16017,212.146811 L737.219434,212.102321 L474.813591,10.4292426 C474.576535,10.2512827 474.383928,10.0584928 474.132056,9.89536284 C456.915886,-3.33299117 427.965459,-3.28850119 409.030635,9.96951281 C389.888387,23.3758267 387.695622,45.5466667 404.734,59.5313504 L404.65992,59.6055003 L514.105573,148.68927 L180.523757,149.04519 L180.079277,149.04519 C152.506736,149.07485 126.000946,167.182272 120.756089,190.064951 C115.363071,213.377701 134.090472,232.716012 162.759395,232.819822 L162.714947,232.923632 L331.794925,232.597372 L30.0822837,464.404997 C29.6970682,464.686767 29.2822207,464.983367 28.9266372,465.265137 C0.465137302,487.080057 -8.73558702,523.35422 9.19175022,546.31105 C27.3857751,569.65346 66.070302,569.69795 94.8281215,546.44452 L259.492936,411.550901 C259.492936,411.550901 257.092747,429.762133 257.285355,440.691838 Z M680.414962,501.67277 C646.486365,536.271145 598.986329,555.891226 547.589691,555.99534 C496.118972,556.084016 448.618936,536.641894 414.690339,502.10284 C398.111256,485.270798 385.93252,465.902826 378.420817,445.274306 C371.057275,425.001705 368.19779,403.483385 370.094236,381.772275 C371.88697,360.550554 378.198578,340.307613 388.273445,321.992572 C398.17052,303.98896 411.801223,287.720457 428.632178,273.958223 C461.612552,247.056616 503.601043,232.493562 547.515611,232.43406 C591.474627,232.374922 633.433486,246.804506 666.443492,273.617133 C683.244814,287.320047 696.860701,303.52923 706.757777,321.503182 C716.877092,339.803394 723.144252,359.972184 725.011065,381.253225 C726.877879,402.934675 724.018395,424.423335 716.654852,444.710766 C709.128334,465.398607 696.994045,484.766578 680.414962,501.67277 Z" fill="#E87D0D" fill-rule="nonzero"/>
+                  <path d="M437.892166,384.026434 C439.46266,355.982916 453.182259,331.276147 473.880184,313.761925 C494.178078,296.559133 521.498748,286.044668 551.308502,286.044668 C581.088624,286.044668 608.409293,296.559133 628.722004,313.761925 C649.405113,331.276147 663.124712,355.982916 664.710022,383.996774 C666.280516,412.811451 654.709235,439.579588 634.41134,459.422119 C613.713415,479.60574 584.27406,492.270555 551.308502,492.270555 C518.342944,492.270555 488.844325,479.60574 468.161216,459.422119 C447.848505,439.579588 436.306856,412.811451 437.892166,384.026434 Z" fill="#265787"/>
+                </g>
+              </svg>
+            </span>
+            <span class="logo-x" aria-hidden="true">&times;</span>
+            <span class="logo-tile wasm-tile">
+              <svg class="wasm-mark" viewBox="97.43 0 107.62 107.62" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="WebAssembly">
+                <rect x="97.43" y="0" width="107.62" height="107.62" fill="#fff" />
+                <path fill="#654ff0" transform="translate(-0.21)" d="M163.76,0c0,.19,0,.38,0,.58a12.34,12.34,0,0,1-24.68,0c0-.2,0-.39,0-.58H97.64V107.62H205.26V0ZM149,96.1l-5.24-25.93h-.09L138,96.1h-7.22L122.6,58h7.13l4.88,25.93h.09L140.58,58h6.67l5.28,26.25h.09L158.19,58h7L156.1,96.1Zm39.26,0-2.43-8.48H173l-1.87,8.48H164L173.22,58h11.25l11.21,38.1Z" />
+                <polygon fill="#654ff0" transform="translate(-0.21)" points="177.3 67.39 174.19 81.37 183.87 81.37 180.3 67.39 177.3 67.39" />
+              </svg>
+            </span>
+          </div>
+          <h1 id="project-title" class="splash-title">Blender in WebAssembly</h1>
+          <p class="project-copy">
+            Blender compiled to WebAssembly with a WebGPU backend.<br />
+            The real Blender interface, rendering entirely inside this browser tab.
+          </p>
+
+          <div id="stage-card" class="launch-panel" data-phase="loading">
+            <div class="panel-loading" aria-label="Loading Blender">
+              <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div id="progress-fill" class="progress-fill"></div>
+              </div>
+              <div class="progress-meta">
+                <span id="progress-phase">Preparing</span>
+                <span id="progress-percent"></span>
+              </div>
+              <p id="splash-status" class="splash-status">Preparing Blender…</p>
+            </div>
+
+            <div class="panel-ready" aria-label="Launch">
+              <button id="start-btn" type="button" class="start-btn">Launch Blender</button>
+              <p id="webgpu-note" class="jspi-note" hidden></p>
+            </div>
+
+            <!-- GPU status: populated early (before downloads finish) by the
+                 adapter probe. Shown only when WebGPU is missing or falls back
+                 to a software renderer; the acknowledgement checkbox gates the
+                 Launch button in that case. -->
+            <div id="gpu-warning" class="gpu-warning" hidden>
+              <p id="gpu-warning-text" class="gpu-warning-text"></p>
+              <label id="gpu-ack-row" class="gpu-ack-row" hidden>
+                <input type="checkbox" id="gpu-ack" />
+                <span>Launch anyway with software rendering — expect it to be extremely slow.</span>
+              </label>
+            </div>
+          </div>
+
+          <section class="startup-console" aria-label="Startup console">
+            <p class="phase-kicker">Startup log</p>
+            <div id="console-output" class="console-box" role="log" aria-label="Startup console output"></div>
+          </section>
+        </div>
+      </main>
+    </section>
+    <canvas id="canvas" width="1536" height="864" tabindex="0"></canvas>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

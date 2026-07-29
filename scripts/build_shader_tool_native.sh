@@ -8,7 +8,7 @@
 # wasm build runs this native binary for shader codegen (the macros.cmake wiring,
 # blender_wasm_host_tool_native(shader_tool, …), is committed in the fork).
 set -euo pipefail
-ROOT="${ROOT:-/home/admin/blender-wasm}"
+ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SYSROOT="${SYSROOT:-$ROOT/wasm-sysroot}"
 ST="$ROOT/blender/source/blender/gpu/shader_tool"
 

@@ -12,7 +12,7 @@
 # pipeline enters the WebGPU backend with device_ != null. EEVEE pixels need the
 # rest of the backend; this unblocks all of that by making it browser-verifiable.
 set -euo pipefail
-ROOT="${ROOT:-/home/admin/blender-wasm}"
+ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 export PATH="$ROOT/emsdk/upstream/emscripten:$PATH"
 BUILD="$ROOT/build-blender"
 WEB="$ROOT/web"
@@ -27,7 +27,18 @@ cp -r "$ROOT/blender/release/datafiles" "$STAGE/5.3/datafiles"
 cp -r "$SYSROOT/lib/python3.13" "$STAGE/python3.13"
 # Trim weight not needed at runtime (tests, caches, dev-only modules).
 ( cd "$STAGE/python3.13" && rm -rf test tests idlelib lib2to3 turtledemo tkinter \
+    config-3.13-wasm32-emscripten ensurepip \
     && find . -name '__pycache__' -type d -prune -exec rm -rf {} + )
+# config-3.13-*/: build artifacts incl. a 41MB libpython3.13.a never read at
+# runtime; ensurepip: bundled pip wheel (no pip on wasm). splash_template.xcf
+# is a GIMP source file shipped by accident upstream.
+rm -f "$STAGE/5.3/datafiles/splash_template.xcf"
+# OCIO diet: a browser canvas is an sRGB display — drop the P3/Rec.2020/
+# Rec.2100 display definitions and their (multi-MB) AgX cubes, plus the
+# niche Khronos PBR Neutral view. AgX_Base_Rec2020.cube STAYS: the kept
+# False Color view transform samples it. config.ocio is patched in staging
+# only (source tree untouched).
+python3 "$ROOT/scripts/trim_ocio.py" "$STAGE/5.3/datafiles/colormanagement"
 echo ">>   scripts=$(du -shL "$STAGE/5.3/scripts"|cut -f1) datafiles=$(du -shL "$STAGE/5.3/datafiles"|cut -f1) py=$(du -sh "$STAGE/python3.13"|cut -f1)"
 
 # --- grab CMake's exact link command for the `blender` target ---------------
@@ -48,14 +59,23 @@ cmd=${cmd//-sNODERAWFS=1/}
 # render output written on the proxied-main worker is readable from the UI
 # thread. Preload Blender's scripts/datafiles at /5.3 and CPython at its compiled
 # prefix path. callMain/FS exported so JS can run the CLI and read results back.
-# NOTE: deliberately NOT using PROXY_TO_PTHREAD. The WebGPU device is a live JS
-# GPUDevice handed in via Module.preinitializedWebGPUDevice; it cannot cross to a
-# worker thread, so the render (which creates the GPU context) must run on the
-# browser main thread where the device lives. Blender's worker pthreads are
-# served from a pre-spawned pool so pthread_create doesn't need the (blocked)
-# main thread. The GPU context is created early in the render, before heavy
-# multithreading, so this reaches device acquisition.
-WEB_FLAGS="-pthread -sEXIT_RUNTIME=0 -g2 \
+#
+# Readback architecture: render on the browser main thread. GPU->host readback is
+# DEFERRED, not synchronous — synchronous readback is impossible here because JSPI
+# can't suspend through CPython's C-call trampoline (a JS frame present throughout
+# the Python-driven render). Instead WebGPUContext::read_color_sync copies the
+# composited combined texture into a persistent buffer during the render; after
+# the render call returns and the browser event loop is free, JS maps that buffer
+# (wgpu_capture_map) and reads the pixels. No JSPI, no suspend.
+# NOTE: -sJSPI was tried for synchronous GPU readbacks (click-select) and is a
+# NON-STARTER with -fexceptions: emscripten wraps ALL invoke_* trampolines as
+# WebAssembly.Suspending, and every entry into wasm that is not a promising
+# export (static ctors, html5 event callbacks, main-loop ticks) throws
+# SuspendError on the first exception-guarded call. Select readback needs a
+# different design (CPU raycast fallback or cached async readback).
+WEB_FLAGS="-pthread \
+  -sEXIT_RUNTIME=0 -g2 \
+  -O1 \
   -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=1073741824 -sMAXIMUM_MEMORY=4294967296 \
   -sSTACK_SIZE=16777216 -sDEFAULT_PTHREAD_STACK_SIZE=4194304 \
   -sPTHREAD_POOL_SIZE=32 -sPTHREAD_POOL_SIZE_STRICT=0 \
@@ -67,5 +87,6 @@ WEB_FLAGS="-pthread -sEXIT_RUNTIME=0 -g2 \
 
 echo ">> relinking blender → $WEB/blender.js (web + WebGPU)"
 ( cd "$BUILD" && eval "$cmd $WEB_FLAGS" )
+
 ls -la "$WEB"/blender.js "$WEB"/blender.wasm "$WEB"/blender.data 2>&1
 echo ">> done"

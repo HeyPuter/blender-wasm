@@ -8,7 +8,7 @@ src=$(fetch_extract \
   "minizip-ng-4.0.10.tar.gz" "minizip-ng-4.0.10")
 em_cmake "$src" minizip \
   -DMZ_BUILD_TESTS=OFF \
-  -DMZ_COMPAT=ON \
+  -DMZ_COMPAT=OFF \
   -DMZ_OPENSSL=OFF \
   -DMZ_LIBBSD=OFF \
   -DMZ_BZIP2=OFF \

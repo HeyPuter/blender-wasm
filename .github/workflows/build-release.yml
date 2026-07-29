@@ -1,0 +1,214 @@
+name: build-and-release
+
+# Builds Blender -> wasm (WebGPU backend) and the demo/ static site, then
+# attaches the packaged site to a GitHub Release. (Ported from gecko-wasm's
+# build-release.yml.)
+#
+# Releases: every master push replaces the rolling `latest` prerelease; bumping
+# demo/package.json "version" on master also tags + publishes v<version>;
+# pushing a v* tag by hand still publishes a release for that tag.
+#
+# !!! HEAVY BUILD — READ FIRST !!!
+# A from-scratch build compiles the whole dependency stack (CPython, OpenImageIO,
+# OpenEXR, TBB, Tint/SPIRV/shaderc, …) to wasm AND Blender itself: many GB of
+# object trees, a ~145 MB blender.wasm, and hours on a hosted runner. On a
+# standard hosted runner (4 vCPU / 16 GB RAM / ~14 GB free disk) this is marginal
+# on all three axes:
+#   - disk: we free ~30 GB below; still tight. Prefer a larger/self-hosted runner.
+#   - ram:  the final emcc relink + wasm-opt over the ~145 MB module spikes hard,
+#           so we add a best-effort swapfile below.
+#   - time: on 4 vCPU expect several hours (job cap is ~6 h).
+# If it doesn't fit, switch `runs-on` to a larger/self-hosted runner — the steps
+# are otherwise unchanged.
+
+on:
+  push:
+    branches: ['master']
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create releases / upload assets / push tags
+
+# One build at a time per ref; a new master push supersedes the running one
+# (the build is hours long -- don't queue stale builds).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The Makefile pins the same version (EMSDK_VERSION); keep them in sync.
+  EMSDK_VERSION: '6.0.1'
+  MACH_NO_TERMINAL_FOOTER: '1'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout the build harness (this repo)
+        uses: actions/checkout@v4
+
+      # Release naming + auto-tag decision. Artifacts are named after the pushed
+      # tag, or after the demo package version for branch pushes (which feed the
+      # rolling `latest` prerelease + the auto version release below).
+      # `new_version` is true when no v<version> tag exists yet -- bumping
+      # demo/package.json "version" on master is what cuts a versioned release.
+      - name: Compute the release version/tag
+        id: version
+        run: |
+          PKG_VERSION=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' demo/package.json | head -1)
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v${PKG_VERSION}"
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v${PKG_VERSION}" >/dev/null 2>&1; then
+            NEW_VERSION=false
+          else
+            NEW_VERSION=true
+          fi
+          echo "version=${PKG_VERSION}"     >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"                 >> "$GITHUB_OUTPUT"
+          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo ">> version=${PKG_VERSION} tag=${TAG} new_version=${NEW_VERSION}"
+
+      - name: Free up disk space (dep + object trees are tens of GB)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
+
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          # Host toolchain + build tools for the emscripten dep stack and the
+          # native shader codegen tool (scripts/build_shader_tool_native.sh).
+          # cmake/ninja drive the wasm dep + Blender configure; the rest are
+          # commonly needed by the autotools-based deps.
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build python3 python3-venv pkg-config \
+            git wget curl zstd rsync patch autoconf automake libtool bison flex \
+            gettext unzip ca-certificates
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Best-effort memory headroom: the final emcc relink + wasm-opt over the
+      # ~145 MB module can spike above RAM. Swap lets a peak spill instead of
+      # getting OOM-killed (SIGTERM / exit 143). Never fails the job.
+      - name: Add swap headroom (best-effort)
+        run: |
+          if swapon --show 2>/dev/null | grep -q .; then
+            echo ">> swap already present:"; swapon --show; free -h; exit 0
+          fi
+          SW=/swapfile
+          ( sudo fallocate -l 16G "$SW" || sudo dd if=/dev/zero of="$SW" bs=1M count=16384 ) 2>/dev/null \
+            && sudo chmod 600 "$SW" && sudo mkswap "$SW" >/dev/null 2>&1 && sudo swapon "$SW" 2>/dev/null \
+            && echo ">> added 16G swap at $SW" || echo "!! could not add swap (continuing)"
+          free -h || true
+
+      # Local, pinned emsdk (the Makefile clones + activates EMSDK_VERSION into ./emsdk).
+      - name: Set up emscripten ${{ env.EMSDK_VERSION }} (make toolchain)
+        run: |
+          make toolchain
+          ./emsdk/upstream/emscripten/emcc --version | head -1
+
+      # Fetches the Blender fork, builds the whole wasm dependency stack (CPython,
+      # OIIO, OpenEXR, TBB, Tint/SPIRV/shaderc, …), stages assets, builds the
+      # native shader tool, and runs the CMake configure for build-blender/.
+      - name: Build dependencies + configure Blender (long)
+        run: |
+          ulimit -s unlimited || ulimit -s 524288 || true
+          make configure-blender
+
+      - name: Compile Blender -> wasm (long)
+        run: |
+          ulimit -s unlimited || ulimit -s 524288 || true
+          ninja -C build-blender blender
+
+      # Release link: no --preload-file; emits demo/public/{blender.wasm.zst,
+      # assets.tar.zst, blender.js, manifest.json, wgsl-cache.json}. Compiles the
+      # localdir + provider wasmfs backends and links the demo's runtime.
+      - name: Link the release demo wasm (scripts/link_blender_release.sh)
+        run: |
+          ulimit -s unlimited || ulimit -s 524288 || true
+          bash scripts/link_blender_release.sh
+          ls -la demo/public
+
+      # Static Vite build of the demo front-end: bundles demo/src + copies
+      # demo/public (the wasm/assets) into demo/dist. The result is a static site
+      # that MUST be served cross-origin-isolated (COOP: same-origin +
+      # COEP: require-corp) for SharedArrayBuffer/pthreads.
+      - name: Build the demo (static Vite build)
+        run: |
+          cd demo
+          npm ci || npm install
+          npm run build
+          ls -la dist
+
+      - name: Package the demo site
+        run: |
+          cat > demo/dist/RELEASE.txt <<'TXT'
+          Blender compiled to WebAssembly with a WebGPU backend (emscripten 6.0.1).
+          Static site: serve dist/ cross-origin-isolated (COOP: same-origin,
+          COEP: require-corp) so SharedArrayBuffer/pthreads work. WebGPU required.
+          Assets stream as zstd tars and are served zero-copy from memory (no OPFS
+          extraction); the engine wasm ships as blender.wasm.zst.
+          TXT
+          tar -C demo -czf blender-web-${{ steps.version.outputs.tag }}.tar.gz dist
+          ls -la blender-web-*.tar.gz
+
+      - name: Upload build artifact (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender-web-${{ steps.version.outputs.tag }}
+          path: blender-web-*.tar.gz
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: blender-web-*.tar.gz
+          generate_release_notes: true
+
+      # --- rolling `latest` + auto version tag (master pushes) ---------------
+      # Every master build replaces the `latest` prerelease (delete + recreate so
+      # the tag always points at this commit); bumping demo/package.json "version"
+      # additionally cuts a permanent v<version> tag + release from the same artifact.
+      - name: Delete the previous rolling release + tag
+        if: github.ref == 'refs/heads/master'
+        uses: dev-drprasad/delete-tag-and-release@v1.0.1
+        with:
+          delete_release: true
+          tag_name: latest
+          github_token: ${{ github.token }}
+
+      - name: Publish the rolling `latest` prerelease
+        if: github.ref == 'refs/heads/master'
+        uses: ncipollo/release-action@v1
+        with:
+          name: Continuous Build
+          tag: latest
+          commit: ${{ github.sha }}
+          body: "${{ github.event.head_commit.url }} ${{ github.event.head_commit.message }}"
+          artifacts: 'blender-web-*.tar.gz'
+          prerelease: true
+
+      - name: Tag + release ${{ steps.version.outputs.tag }} (version bumped)
+        if: github.ref == 'refs/heads/master' && steps.version.outputs.new_version == 'true'
+        uses: ncipollo/release-action@v1
+        with:
+          name: ${{ steps.version.outputs.version }}
+          tag: v${{ steps.version.outputs.version }}
+          commit: ${{ github.sha }}
+          body: "${{ github.event.head_commit.url }} ${{ github.event.head_commit.message }}"
+          artifacts: 'blender-web-*.tar.gz'
+          generateReleaseNotes: true

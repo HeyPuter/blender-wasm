@@ -21,7 +21,8 @@ set(WITH_PYTHON_NUMPY    OFF CACHE BOOL "")
 # --- GPU: WebGPU backend (our gpu/webgpu/), no GL/Vulkan -------------------
 # Headless GHOST (no window); EEVEE renders offscreen through the WebGPU device
 # obtained from JS (emscripten_webgpu_get_device), bypassing GL/Vulkan context.
-set(WITH_HEADLESS            ON  CACHE BOOL "")
+set(WITH_HEADLESS            OFF CACHE BOOL "")
+set(WITH_GHOST_WEB           ON  CACHE BOOL "")
 set(WITH_WEBGPU_BACKEND      ON  CACHE BOOL "")
 set(WITH_OPENGL_BACKEND      OFF CACHE BOOL "")
 set(WITH_VULKAN_BACKEND      OFF CACHE BOOL "")

@@ -45,5 +45,27 @@ WB="$BLD/python-wasm"; rm -rf "$WB"; mkdir -p "$WB"
   emmake make -j"$NPROC"
   emmake make install )
 
+# The _decimal module's bundled libmpdec objects compile but are NOT archived
+# into libpython3.13.a by CPython's static-wasm build, so _decimal.o is left with
+# undefined mpd_* symbols at the final Blender link. Fold them into the archive.
+# Several bundled modules compile their support sources but CPython's static-wasm
+# build does NOT archive them into libpython3.13.a, leaving undefined symbols at
+# the final Blender link: _decimal's libmpdec (mpd_*), pyexpat/_elementtree's
+# vendored expat (PyExpat_XML_*), and hashlib's HACL SHA2 (python_hashlib_*).
+# Fold them in. Prefix member names: libmpdec has context.o/io.o whose BASENAMES
+# collide with core CPython objects in the flat-namespaced archive (`ar r` keys
+# by basename and would silently overwrite Python's own context.o).
+_mz=$(mktemp -d)
+for _o in "$WB"/Modules/_decimal/libmpdec/*.o \
+          "$WB"/Modules/expat/xmlparse.o "$WB"/Modules/expat/xmltok.o "$WB"/Modules/expat/xmlrole.o \
+          "$WB"/Modules/_hacl/Hacl_Hash_SHA2.o; do
+  [ -f "$_o" ] && cp "$_o" "$_mz/pymod_$(basename "$_o")"
+done
+if ls "$_mz"/*.o >/dev/null 2>&1; then
+  emar r "$SYSROOT/lib/libpython3.13.a" "$_mz"/*.o
+  log "archived bundled libmpdec/expat/hacl objects into libpython3.13.a"
+fi
+rm -rf "$_mz"
+
 log "installed python into $SYSROOT"
 ls -la "$SYSROOT"/lib/libpython3.13*.a 2>&1

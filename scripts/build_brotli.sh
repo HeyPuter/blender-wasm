@@ -10,6 +10,7 @@ src=$(fetch_extract \
 
 b="$BLD/brotli"; rm -rf "$b"
 emcmake cmake -S "$src" -B "$b" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DBUILD_SHARED_LIBS=OFF -DBROTLI_DISABLE_TESTS=ON \
   -DCMAKE_C_FLAGS="$WASM_CFLAGS" -DCMAKE_CXX_FLAGS="$WASM_CXXFLAGS"
 ninja -C "$b" -j"$NPROC" brotlicommon-static brotlidec-static brotlienc-static

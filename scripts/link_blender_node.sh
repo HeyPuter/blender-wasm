@@ -5,7 +5,7 @@
 # workgroup) that EEVEE-Next's compute passes need. We reuse CMake's exact link
 # line, swap to ENVIRONMENT=node, and emit node-webgpu/blender_node.{js,wasm,data}.
 set -euo pipefail
-ROOT="${ROOT:-/home/admin/blender-wasm}"
+ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 export PATH="$ROOT/emsdk/upstream/emscripten:$PATH"
 BUILD="$ROOT/build-blender"
 OUT="$ROOT/node-webgpu"

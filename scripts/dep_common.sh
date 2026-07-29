@@ -4,7 +4,7 @@
 # SAME ABI flags (pthreads + wasm-simd/SSE + exceptions) so they link together.
 set -euo pipefail
 
-ROOT="${ROOT:-/home/admin/blender-wasm}"
+ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # Pin to the in-repo emsdk; a stale exported EMSDK in the shell env must not
 # redirect us to a path that no longer exists (see emsdk-build-setup memory).
 EMSDK="$ROOT/emsdk"
@@ -24,6 +24,11 @@ NPROC="${NPROC:-$(nproc)}"
 # __SSE2__ etc., which pulls in x86 intrinsic headers (mmintrin.h / MMX) that
 # emscripten does NOT emulate — breaking OpenEXR/OIIO. Deps fall back to scalar
 # paths. Cycles' own kernels can opt into SSE separately at the Blender stage.
+# -fexceptions (emscripten JS-based exceptions + setjmp/longjmp). NOT
+# -fwasm-exceptions: native wasm SjLj corrupts the heap when Blender's Tint
+# GLSL->WGSL ICE-recovery longjmp fires (some EEVEE shaders Tint can't translate).
+# The GPU readback is deferred (copy-to-buffer + map after render), so it does not
+# need JSPI/wasm-EH. Keep this identical across every object (deps + Blender).
 WASM_CFLAGS="${WASM_CFLAGS:--O2 -pthread -msimd128 -fexceptions}"
 WASM_CXXFLAGS="${WASM_CXXFLAGS:-$WASM_CFLAGS}"
 
@@ -56,6 +61,7 @@ em_cmake() {
   rm -rf "$b"
   emcmake cmake -S "$srcdir" -B "$b" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_INSTALL_PREFIX="$SYSROOT" \
     -DCMAKE_PREFIX_PATH="$SYSROOT" \
     -DCMAKE_FIND_ROOT_PATH="$SYSROOT" \

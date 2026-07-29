@@ -12,7 +12,7 @@
 
 ROOT          := $(CURDIR)
 BLENDER_URL   := https://github.com/HeyPuter/blender
-BLENDER_REF   := a5a9e21a2fb41d266bc8186bcce72b08704b4f05
+BLENDER_REF   := 6b031d3d41c392883e3c495aa72343e10d15b43d
 # NOTE: ':=' (not '?=') so a stale exported EMSDK in the environment cannot
 # point us at the wrong tree. Command-line `make EMSDK=...` still overrides.
 EMSDK         := $(ROOT)/emsdk
@@ -78,16 +78,25 @@ blender: blender/.git
 blender/.git:
 	git init -q blender
 	git -C blender remote add origin $(BLENDER_URL) 2>/dev/null || true
-	git -C blender fetch --depth 1 origin $(BLENDER_REF)
-	git -C blender checkout -q --detach FETCH_HEAD
+	GIT_LFS_SKIP_SMUDGE=1 git -C blender fetch --depth 1 origin $(BLENDER_REF)
+	# Skip LFS smudge on checkout: the fork's GitHub LFS storage does NOT host the
+	# LFS objects (forks don't inherit LFS), so smudging every pointer 404s and
+	# aborts the checkout. Check out pointers; the real objects are pulled from
+	# upstream by content hash in `blender-assets` below.
+	GIT_LFS_SKIP_SMUDGE=1 git -C blender checkout -q --detach FETCH_HEAD
 	@echo ">> blender at $$(git -C blender rev-parse --short HEAD)"
 
 # Git-LFS datafiles (startup.blend, fonts, icons, colormanagement) needed by the
-# FULL Blender build. The fork on GitHub does NOT host the LFS objects
-# (forks don't inherit LFS storage), so pull them from upstream by content hash.
+# FULL Blender build. The GitHub fork ($(BLENDER_URL)) DOES host these objects in
+# its LFS storage and serves them anonymously, so pull from `origin` (default
+# lfs.url). NOTE: do NOT point lfs.url at projects.blender.org — that endpoint
+# requires authentication and fails in CI. The checkout above skips smudge, so
+# these pointers are materialized here.
+# (The essentials `assets/brushes/**` blends are the ONE thing not hosted on any
+# anonymous LFS — 404 on every fork and auth-gated upstream — so they are
+# vendored in-repo and bundled by scripts/link_blender_release.sh instead.)
 blender-assets: blender
 	cd blender && git lfs install --local 2>/dev/null || true
-	cd blender && git config lfs.url https://projects.blender.org/blender/blender.git/info/lfs
 	cd blender && git lfs pull --include="release/datafiles/**"
 	@echo ">> release/datafiles LFS pulled ($$(du -sh blender/release/datafiles | cut -f1))"
 

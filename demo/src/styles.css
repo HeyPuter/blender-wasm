@@ -100,11 +100,13 @@ input {
   opacity: 0.7;
 }
 
+/* Puter brand blue (not the page's Blender orange): this is the Puter Labs
+   mark, matched to the other Puter Labs demos. */
 .labs-badge {
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(232,125,13, 0.09);
-  color: #e87d0d;
+  background: rgba(29, 73, 231, 0.09);
+  color: #1d49e7;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.05em;

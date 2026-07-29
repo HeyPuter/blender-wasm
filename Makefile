@@ -11,7 +11,7 @@
 #   * OffscreenCanvas             (-sOFFSCREENCANVAS_SUPPORT)
 
 ROOT          := $(CURDIR)
-BLENDER_URL   := https://github.com/heyputer/blender-wasm
+BLENDER_URL   := https://github.com/velzie/blender
 BLENDER_REF   := a5a9e21a2fb41d266bc8186bcce72b08704b4f05
 # NOTE: ':=' (not '?=') so a stale exported EMSDK in the environment cannot
 # point us at the wrong tree. Command-line `make EMSDK=...` still overrides.

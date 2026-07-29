@@ -27,6 +27,12 @@ set(WITH_WEBGPU_BACKEND      ON  CACHE BOOL "")
 set(WITH_OPENGL_BACKEND      OFF CACHE BOOL "")
 set(WITH_VULKAN_BACKEND      OFF CACHE BOOL "")
 set(WITH_GHOST_SDL           OFF CACHE BOOL "")
+# The web GHOST backend is the only one; disable the desktop backends so their
+# find_package(X11 REQUIRED) / Wayland probes don't wall a headless CI runner
+# (they only passed locally because the dev box has libx11-dev installed).
+set(WITH_GHOST_X11           OFF CACHE BOOL "")
+set(WITH_GHOST_WAYLAND       OFF CACHE BOOL "")
+set(WITH_OPENIMAGEDENOISE    OFF CACHE BOOL "")
 set(WITH_INTERNATIONAL       OFF CACHE BOOL "")
 set(WITH_HARFBUZZ            OFF CACHE BOOL "")
 set(WITH_FRIBIDI            OFF CACHE BOOL "")

@@ -389,6 +389,46 @@ canvas.addEventListener("wheel", eatGesture, { passive: false });
 canvas.addEventListener("gesturestart", eatGesture);
 canvas.addEventListener("gesturechange", eatGesture);
 canvas.addEventListener("gestureend", eatGesture);
+/* Middle-mouse over the canvas triggers the browser's autoscroll widget, which
+ * steals MMB (Blender's orbit/pan). Same proxied-event reason emscripten can't
+ * cancel it; do it here. dragstart would otherwise start a browser drag during
+ * a Blender click-drag. Both still propagate to emscripten -> Blender. */
+canvas.addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); });
+canvas.addEventListener("dragstart", eatGesture);
+
+/* Route keyboard shortcuts to Blender, not the browser. Same PROXY_TO_PTHREAD
+ * problem as the wheel above: emscripten forwards keydown to the render thread
+ * asynchronously and never calls preventDefault on that proxied path, so a
+ * Ctrl/Cmd shortcut that Blender handles (Ctrl+S save, Ctrl+O open, Ctrl+A
+ * select-all, Ctrl+Z undo, …) ALSO triggers the browser default (the "save
+ * webpage" dialog for Ctrl+S, etc.). We cancel the default here on the main
+ * thread, synchronously, once Blender is running and focus isn't in a form
+ * field; preventDefault doesn't stop propagation, so the key still reaches
+ * emscripten's listener and Blender receives the shortcut. Plain (unmodified)
+ * keys have no meaningful browser default over the canvas, so they're left
+ * alone. Browser-reserved combos (Ctrl+W/T/N, Ctrl+Shift+I) ignore
+ * preventDefault anyway, so eating them is a harmless no-op. */
+const isEditableTarget = (el) =>
+  !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" ||
+           el.tagName === "SELECT" || el.isContentEditable);
+/* Keys whose STANDALONE (no-modifier) browser default we must also cancel:
+ * Tab moves focus off the canvas (after which no key reaches Blender at all),
+ * the whitespace/navigation keys scroll the page, Backspace navigates back. */
+const NAV_KEYS = new Set([
+  "Tab", " ", "Spacebar", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+  "PageUp", "PageDown", "Home", "End", "Backspace", "/",
+]);
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (!window.Module) return; /* Blender not started yet — leave the browser alone. */
+    if (isEditableTarget(document.activeElement)) return;
+    /* Ctrl/Cmd shortcuts (save/open/undo/…) + focus/scroll/history keys. Plain
+     * character keys have no page default over the canvas, so leave them be. */
+    if (e.ctrlKey || e.metaKey || NAV_KEYS.has(e.key)) e.preventDefault();
+  },
+  { capture: true },
+);
 
 /* ---- File ▸ Open hijack: a REAL, lazy mount (no copying) of a folder the
  * user picks on their machine. Blender's wm_open_mainfile invoke (wasm build)

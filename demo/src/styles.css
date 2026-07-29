@@ -40,6 +40,9 @@ input {
    * the browser scrolling/zooming the page. */
   touch-action: none;
   overscroll-behavior: none;
+  /* Click-drag in the viewport must not select surrounding page text. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 #splash {

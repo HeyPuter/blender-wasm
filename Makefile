@@ -11,7 +11,7 @@
 #   * OffscreenCanvas             (-sOFFSCREENCANVAS_SUPPORT)
 
 ROOT          := $(CURDIR)
-BLENDER_URL   := https://github.com/velzie/blender
+BLENDER_URL   := https://github.com/heyputer/blender-wasm
 BLENDER_REF   := a5a9e21a2fb41d266bc8186bcce72b08704b4f05
 # NOTE: ':=' (not '?=') so a stale exported EMSDK in the environment cannot
 # point us at the wrong tree. Command-line `make EMSDK=...` still overrides.
@@ -83,7 +83,7 @@ blender/.git:
 	@echo ">> blender at $$(git -C blender rev-parse --short HEAD)"
 
 # Git-LFS datafiles (startup.blend, fonts, icons, colormanagement) needed by the
-# FULL Blender build. The velzie fork on GitHub does NOT host the LFS objects
+# FULL Blender build. The fork on GitHub does NOT host the LFS objects
 # (forks don't inherit LFS storage), so pull them from upstream by content hash.
 blender-assets: blender
 	cd blender && git lfs install --local 2>/dev/null || true

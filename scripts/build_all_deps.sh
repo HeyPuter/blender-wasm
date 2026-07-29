@@ -15,12 +15,21 @@ wave() {  # wave <name> <script...>
     pids+=($!)
   done
   wait "${pids[@]}" || true
-  local fail=0
+  local fail=0 failed=()
   for s in "$@"; do
     local rc; rc=$(cat "$SC/$s.status" 2>/dev/null || echo 1)
-    if [ "$rc" = 0 ]; then echo "  ok   $s"; else echo "  FAIL $s (rc=$rc, log: $SC/$s.log)"; fail=1; fi
+    if [ "$rc" = 0 ]; then echo "  ok   $s"; else echo "  FAIL $s (rc=$rc, log: $SC/$s.log)"; fail=1; failed+=("$s"); fi
   done
-  [ "$fail" = 0 ] || { echo "wave '$name' had failures"; exit 1; }
+  if [ "$fail" != 0 ]; then
+    # Dump the failing deps' logs so the error is visible in CI (the log files
+    # live on the runner and are otherwise lost).
+    for s in "${failed[@]}"; do
+      echo "======== last 80 lines of $s.log ========"
+      tail -n 80 "$SC/$s.log" 2>/dev/null || echo "(no log)"
+      echo "======== end $s.log ========"
+    done
+    echo "wave '$name' had failures"; exit 1
+  fi
 }
 
 # Wave 1: no inter-deps.

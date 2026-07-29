@@ -86,18 +86,21 @@ blender/.git:
 	GIT_LFS_SKIP_SMUDGE=1 git -C blender checkout -q --detach FETCH_HEAD
 	@echo ">> blender at $$(git -C blender rev-parse --short HEAD)"
 
-# Git-LFS datafiles (startup.blend, fonts, icons, colormanagement) needed by the
-# FULL Blender build. The GitHub fork ($(BLENDER_URL)) DOES host these objects in
-# its LFS storage and serves them anonymously, so pull from `origin` (default
-# lfs.url). NOTE: do NOT point lfs.url at projects.blender.org — that endpoint
-# requires authentication and fails in CI. The checkout above skips smudge, so
-# these pointers are materialized here.
-# (The essentials `assets/brushes/**` blends are the ONE thing not hosted on any
-# anonymous LFS — 404 on every fork and auth-gated upstream — so they are
-# vendored in-repo and bundled by scripts/link_blender_release.sh instead.)
+# Git-LFS datafiles (startup.blend, fonts, icons, colormanagement, studiolights)
+# needed by the FULL Blender build. The GitHub fork's LFS storage does NOT host
+# them (all objects 404), so pull from upstream projects.blender.org — which
+# DOES serve them anonymously, but ONLY if we tell git-lfs the endpoint needs no
+# auth via `lfs.<url>.access none`. Without that, git-lfs demands credentials
+# and fails in CI (this was the missing piece). The checkout above skips smudge,
+# so the pointers are materialized here.
+# (The essentials `assets/brushes/**` blends are vendored in-repo — demo/brush-
+# assets/ — and bundled by scripts/link_blender_release.sh, so they need no LFS.)
+BLENDER_LFS_URL := https://projects.blender.org/blender/blender.git/info/lfs
 blender-assets: blender
 	cd blender && git lfs install --local 2>/dev/null || true
-	cd blender && git lfs pull --include="release/datafiles/**"
+	cd blender && git config lfs.url "$(BLENDER_LFS_URL)"
+	cd blender && git config "lfs.$(BLENDER_LFS_URL).access" none
+	cd blender && GIT_TERMINAL_PROMPT=0 git lfs pull --include="release/datafiles/**"
 	@echo ">> release/datafiles LFS pulled ($$(du -sh blender/release/datafiles | cut -f1))"
 
 # ---------------------------------------------------------------------------

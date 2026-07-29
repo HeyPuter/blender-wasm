@@ -126,3 +126,19 @@ make verify-webgpu      # standalone WebGPU compute/triangle probes
 make serve              # serve web/ on :8080 (COOP/COEP headers)
 make print-env          # show resolved toolchain paths
 ```
+
+---
+
+## License
+
+**GPL-2.0-or-later**, same as Blender — `blender.wasm` is a build of Blender, and
+everything tracked here is build tooling for it. [`LICENSE`](LICENSE) is a verbatim
+copy of Blender's `doc/license/GPL-license.txt`.
+
+Corresponding source for a released `blender-web-*.tar.gz` is this repo at the
+matching tag plus the pinned fork it builds (`BLENDER_URL` @ `BLENDER_REF` in the
+`Makefile`). Bundled third-party deps keep their own licenses; texts land in
+`blender/doc/license/` after `make blender`.
+
+Blender® is a registered trademark of the Blender Foundation; this is an unofficial
+build.

@@ -33,15 +33,27 @@ wave() {  # wave <name> <script...>
 }
 
 # Wave 1: no inter-deps.
-wave foundational zlib fmt imath zstd jpeg libdeflate robinmap yamlcpp expat pystring tbb eigen pugixml
+wave foundational zlib fmt imath zstd jpeg libdeflate robinmap yamlcpp expat pystring tbb eigen pugixml brotli
 # Wave 2: depend on wave 1.
 wave mid png minizip openjph tiff
-# Wave 3: OpenEXR (Imath, libdeflate, openjph).
+# Wave 3: FreeType (zlib + png + brotli). Blender's find_package(Freetype) is
+# REQUIRED, so this must be in the sysroot before configure.
+wave text freetype
+# Wave 4: OpenEXR (Imath, libdeflate, openjph).
 wave openexr openexr
-# Wave 4: OpenColorIO (Imath, expat, yaml-cpp, pystring, minizip).
+# Wave 5: OpenColorIO (Imath, expat, yaml-cpp, pystring, minizip).
 wave ocio ocio
-# Wave 5: OpenImageIO (OpenEXR, OCIO, png, jpeg, fmt, robin-map, zstd).
+# Wave 6: OpenImageIO (OpenEXR, OCIO, png, jpeg, fmt, robin-map, zstd).
 wave oiio oiio
+
+# --- WebGPU shader toolchain: GLSL --(shaderc)--> SPIR-V --(Tint)--> WGSL. -----
+# Needed by the WITH_WEBGPU_BACKEND build/link (libtint_*.a, libSPIRV-Tools*.a,
+# libshaderc_combined.a). Run one heavy build per wave (NOT parallel) so the
+# huge Tint/shaderc/glslang compiles don't OOM the runner. Tint clones Dawn and
+# must precede spirv_tools (which reuses Dawn's SPIRV-Tools source tree).
+wave tint    tint
+wave spirv   spirv_tools
+wave shaderc shaderc
 
 echo "==== all deps built into wasm-sysroot ===="
 ls -1 wasm-sysroot/lib/*.a

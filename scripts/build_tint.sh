@@ -16,6 +16,16 @@ if [ ! -d "$SRC/dawn" ]; then
 fi
 cd "$SRC/dawn"
 
+# Patch Tint's ICE handler to longjmp to a host-armed recovery point instead of
+# trapping the whole wasm module on an unsupported shader (Blender's WebGPU
+# backend arms this around Tint calls — see webgpu_shader.cc's use of
+# tint::internal_compiler_error_recovery). Idempotent: only applied when the
+# declaration isn't already present.
+if ! grep -q "internal_compiler_error_recovery" src/tint/utils/ice/ice.h; then
+  log "applying tint ICE-recovery patch"
+  git apply "$ROOT/scripts/patches/tint-ice-recovery.patch"
+fi
+
 # Fetch only the deps Tint needs (no gclient): abseil, SPIRV-Tools, SPIRV-Headers.
 # NOTE: guard on a real file (abseil's CMakeLists) not just the dir — an
 # interrupted first fetch leaves empty dirs that would skip a needed re-fetch.

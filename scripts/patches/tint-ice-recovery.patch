@@ -1,0 +1,55 @@
+diff --git a/src/tint/utils/ice/ice.cc b/src/tint/utils/ice/ice.cc
+index 6649ca3bc2..5f708d0d5f 100644
+--- a/src/tint/utils/ice/ice.cc
++++ b/src/tint/utils/ice/ice.cc
+@@ -36,6 +36,9 @@
+ 
+ namespace tint {
+ 
++// Host-armed recovery point for ICEs (see ice.h). Default: trap as before.
++std::jmp_buf* internal_compiler_error_recovery = nullptr;
++
+ InternalCompilerError::InternalCompilerError(const char* file,
+                                              size_t line,
+                                              InternalCompilerErrorCallback callback)
+@@ -63,6 +66,14 @@ InternalCompilerError::~InternalCompilerError() {
+         std::cerr << err.str();
+     }
+ 
++    // If the host armed a recovery point, longjmp out instead of trapping so a
++    // single unsupported shader fails gracefully rather than killing the module.
++    if (internal_compiler_error_recovery) {
++        std::jmp_buf* target = internal_compiler_error_recovery;
++        internal_compiler_error_recovery = nullptr;
++        std::longjmp(*target, 1);
++    }
++
+     debugger::Break();
+ 
+ #if defined(_MSC_VER) && !defined(__clang__)
+diff --git a/src/tint/utils/ice/ice.h b/src/tint/utils/ice/ice.h
+index a6fb44df19..c0649cb1a2 100644
+--- a/src/tint/utils/ice/ice.h
++++ b/src/tint/utils/ice/ice.h
+@@ -28,6 +28,7 @@
+ #ifndef SRC_TINT_UTILS_ICE_ICE_H_
+ #define SRC_TINT_UTILS_ICE_ICE_H_
+ 
++#include <csetjmp>
+ #include <optional>
+ #include <sstream>
+ #include <string>
+@@ -37,6 +38,13 @@
+ 
+ namespace tint {
+ 
++/// Host-armed recovery point for Tint internal compiler errors. Tint is built
++/// -fno-exceptions and its ICE handler normally traps the whole (wasm) module.
++/// When this points at a setjmp buffer, the ICE destructor longjmps there
++/// instead, so a single bad shader fails gracefully rather than aborting the
++/// render. Set/cleared by the host around a Tint call; nullptr = default trap.
++extern std::jmp_buf* internal_compiler_error_recovery;
++
+ /// An instance of InternalCompilerErrorCallbackInfo can be used to set up a callback so that the
+ /// user of Tint can capture an ICE message before crashing.
+ struct InternalCompilerErrorCallbackInfo {

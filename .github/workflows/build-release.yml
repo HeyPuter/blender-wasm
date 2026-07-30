@@ -131,7 +131,19 @@ jobs:
       - name: Compile Blender -> wasm (long)
         run: |
           ulimit -s unlimited || ulimit -s 524288 || true
-          ninja -C build-blender blender
+          # Build every object + static library. The final standalone `blender`
+          # executable link then fails ON PURPOSE: creator.cc references the demo
+          # wasmfs backends (wasmfs_create_provider_backend / _opfs_backend /
+          # _directory) which are compiled in ONLY by the release link step
+          # below, and the default INITIAL_MEMORY is too small. So don't treat a
+          # ninja failure here as fatal -- the release link step is the real link
+          # and will fail loudly if any object/library is actually missing.
+          ninja -C build-blender blender || true
+          # Sanity: the objects the release link consumes must exist.
+          test -f build-blender/source/creator/CMakeFiles/blender.dir/creator.cc.o
+          test -f build-blender/lib/libbf_gpu.a
+          test -f build-blender/lib/libbf_blenkernel.a
+          echo ">> object/library build complete (standalone exe link skipped)"
 
       # Release link: no --preload-file; emits demo/public/{blender.wasm.zst,
       # assets.tar.zst, blender.js, manifest.json, wgsl-cache.json}. Compiles the

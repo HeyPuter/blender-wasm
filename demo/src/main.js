@@ -365,13 +365,22 @@ const scan = (t) => {
 };
 const canvas = document.getElementById("canvas");
 const fitCanvas = () => {
-  if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+  /* CSS pixels define the layout, while canvas.width/height define the
+   * backing-store resolution. Keep those in device pixels so high-DPI
+   * displays do not get a low-resolution framebuffer stretched by CSS. */
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.round(rect.width * dpr));
+  const height = Math.max(1, Math.round(rect.height * dpr));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
   }
 };
 fitCanvas();
 window.addEventListener("resize", fitCanvas);
+window.visualViewport?.addEventListener("resize", fitCanvas);
+window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`)?.addEventListener("change", fitCanvas);
 window.addEventListener("contextmenu", (e) => e.preventDefault());
 
 /* Keep pinch-to-zoom inside Blender instead of zooming the browser page.

@@ -1,22 +1,15 @@
 #!/usr/bin/env bash
 # Shared helpers for cross-compiling Blender's dependencies to WASM.
 # Sourced by every scripts/build_<dep>.sh. All libs are built static with the
-# SAME ABI flags (pthreads + wasm-simd/SSE + exceptions) so they link together.
+# SAME ABI flags ($ABI_FLAGS from env.sh: pthreads + JS exceptions, or with
+# THREADS=0 no pthreads + wasm exceptions) so they link together.
 set -euo pipefail
 
-ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-# Pin to the in-repo emsdk; a stale exported EMSDK in the shell env must not
-# redirect us to a path that no longer exists (see emsdk-build-setup memory).
-EMSDK="$ROOT/emsdk"
-EM_BIN="$EMSDK/upstream/emscripten"
-export PATH="$EM_BIN:$PATH"
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
-SYSROOT="${SYSROOT:-$ROOT/wasm-sysroot}"
-DEPS="${DEPS:-$ROOT/deps}"
-DL="$DEPS/downloads"
+DL="$DEPS_DOWNLOADS"
 SRC="$DEPS/src"
 BLD="$DEPS/build"
-NPROC="${NPROC:-$(nproc)}"
 
 # ABI-critical flags (-pthread, -fexceptions) MUST match across all objects and
 # the final Blender link. SIMD flags only affect codegen, not ABI, so they need
@@ -29,14 +22,17 @@ NPROC="${NPROC:-$(nproc)}"
 # GLSL->WGSL ICE-recovery longjmp fires (some EEVEE shaders Tint can't translate).
 # The GPU readback is deferred (copy-to-buffer + map after render), so it does not
 # need JSPI/wasm-EH. Keep this identical across every object (deps + Blender).
-WASM_CFLAGS="${WASM_CFLAGS:--O2 -pthread -msimd128 -fexceptions}"
+# -fPIC: the headless build links -sMAIN_MODULE (so CPython can dlopen numpy's
+# side modules), which requires every input to be position-independent. PIC
+# objects link into the static browser builds just as well, so one sysroot
+# serves every flavour.
+WASM_CFLAGS="${WASM_CFLAGS:--O2 $ABI_FLAGS -msimd128 -fPIC}"
 WASM_CXXFLAGS="${WASM_CXXFLAGS:-$WASM_CFLAGS}"
 
 mkdir -p "$DL" "$SRC" "$BLD" "$SYSROOT"
 
-# Write to stderr: fetch_extract returns its path on stdout via `echo`, so log
-# output must not pollute that captured value.
-log() { echo ">> [$(basename "${0%.sh}")] $*" >&2; }
+# log() comes from env.sh and writes to stderr: fetch_extract returns its path
+# on stdout via `echo`, so log output must not pollute that captured value.
 
 # fetch_extract <url> <tarball-name> <expected-extracted-dirname>
 fetch_extract() {
@@ -51,6 +47,18 @@ fetch_extract() {
     tar -C "$SRC" -xf "$DL/$file"
   fi
   echo "$SRC/$dir"
+}
+
+# apply_patches <name> <srcdir>
+# Applies patches/<name>/*.patch to a dependency's source. They are guarded
+# for the build they serve (e.g. emscripten without pthreads), so they apply
+# in every flavour; -N skips one already applied.
+apply_patches() {
+  local name="$1" srcdir="$2" p
+  for p in "$ROOT/patches/$name"/*.patch; do
+    [ -f "$p" ] || continue
+    patch -d "$srcdir" -p1 -N -r - --silent < "$p" || log "$(basename "$p"): already applied"
+  done
 }
 
 # em_cmake <srcdir> <builddir-name> [extra cmake -D args...]

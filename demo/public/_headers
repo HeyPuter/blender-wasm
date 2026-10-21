@@ -1,0 +1,9 @@
+# Static hosts that read _headers (Cloudflare Pages, Netlify).
+# Blender's UI is a pthread build: it needs cross-origin isolation. Top-level
+# visits get it from COOP + COEP; embedded in another origin's page (a
+# playground), Document-Isolation-Policy isolates just this frame (Chromium).
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Document-Isolation-Policy: isolate-and-require-corp
+  Cross-Origin-Resource-Policy: cross-origin

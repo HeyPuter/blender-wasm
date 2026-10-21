@@ -1,0 +1,9 @@
+// The Blender UI site (./build.sh web → dist/) as Cloudflare Workers static
+// assets: `npx wrangler deploy` from this directory. dist/_headers sets the
+// isolation headers (COOP/COEP, Document-Isolation-Policy for embedding).
+// Files are capped at 25 MiB each; package.sh splits larger ones into parts.
+{
+  "name": "blender-web-ui",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./dist" }
+}

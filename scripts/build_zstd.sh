@@ -11,5 +11,5 @@ em_cmake "$src/build/cmake" zstd \
   -DZSTD_BUILD_STATIC=ON \
   -DZSTD_BUILD_PROGRAMS=OFF \
   -DZSTD_BUILD_TESTS=OFF \
-  -DZSTD_MULTITHREAD_SUPPORT=ON
+  -DZSTD_MULTITHREAD_SUPPORT=$([ "$THREADS" = 1 ] && echo ON || echo OFF)
 log "done"

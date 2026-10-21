@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# linked by `npm run blender:ui`
+public/blender-ui

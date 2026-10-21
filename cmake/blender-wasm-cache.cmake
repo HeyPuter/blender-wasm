@@ -11,11 +11,20 @@ set(WITH_LIBS_PRECOMPILED    OFF CACHE BOOL "")
 set(WITH_STRICT_BUILD_OPTIONS OFF CACHE BOOL "")
 
 # --- our cross-compiled CPython 3.13 in the wasm sysroot -------------------
+# The sysroot location comes from -DBLENDER_WASM_SYSROOT (passed before -C),
+# then $SYSROOT, then the default layout next to the Blender checkout.
+if(NOT BLENDER_WASM_SYSROOT)
+  if(DEFINED ENV{SYSROOT})
+    set(BLENDER_WASM_SYSROOT "$ENV{SYSROOT}")
+  else()
+    set(BLENDER_WASM_SYSROOT "${CMAKE_SOURCE_DIR}/../wasm-sysroot")
+  endif()
+endif()
 set(PYTHON_VERSION       "3.13" CACHE STRING "")
-set(PYTHON_INCLUDE_DIR   "${CMAKE_SOURCE_DIR}/../wasm-sysroot/include/python3.13" CACHE PATH "")
-set(PYTHON_INCLUDE_DIRS  "${CMAKE_SOURCE_DIR}/../wasm-sysroot/include/python3.13" CACHE PATH "")
-set(PYTHON_LIBRARY       "${CMAKE_SOURCE_DIR}/../wasm-sysroot/lib/libpython3.13.a" CACHE FILEPATH "")
-set(PYTHON_LIBPATH       "${CMAKE_SOURCE_DIR}/../wasm-sysroot/lib" CACHE PATH "")
+set(PYTHON_INCLUDE_DIR   "${BLENDER_WASM_SYSROOT}/include/python3.13" CACHE PATH "")
+set(PYTHON_INCLUDE_DIRS  "${BLENDER_WASM_SYSROOT}/include/python3.13" CACHE PATH "")
+set(PYTHON_LIBRARY       "${BLENDER_WASM_SYSROOT}/lib/libpython3.13.a" CACHE FILEPATH "")
+set(PYTHON_LIBPATH       "${BLENDER_WASM_SYSROOT}/lib" CACHE PATH "")
 set(WITH_PYTHON_NUMPY    OFF CACHE BOOL "")
 
 # --- GPU: WebGPU backend (our gpu/webgpu/), no GL/Vulkan -------------------

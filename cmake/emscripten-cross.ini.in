@@ -1,0 +1,41 @@
+# Meson cross file: build Python extension modules for wasm32-emscripten.
+#
+# Used for the numpy cross-build (scripts/build_numpy.sh). The compilers are the
+# emsdk wrappers so meson gets emscripten's sysroot and defaults; needs_exe_wrapper
+# tells meson it cannot run target binaries during configure, so numpy's compile
+# checks fall back to cross-safe defaults instead of trying to execute wasm.
+#
+# This is a template. Meson does not expand environment variables, so
+# build_numpy.sh renders it to numpy-build/emscripten-cross.ini with @EM_BIN@
+# replaced by the in-repo emsdk path of the current checkout.
+
+[binaries]
+c = '@EM_BIN@/emcc'
+cpp = '@EM_BIN@/em++'
+ar = '@EM_BIN@/emar'
+ranlib = '@EM_BIN@/emranlib'
+strip = '@EM_BIN@/emstrip'
+pkg-config = 'pkg-config'
+
+[host_machine]
+system = 'emscripten'
+cpu_family = 'wasm32'
+cpu = 'wasm32'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true
+# numpy probes the long double representation by running a program, which is
+# impossible when cross-compiling, so it must be declared. Verified with a
+# _Static_assert under emcc: sizeof(long double) == 16 on wasm32-emscripten,
+# i.e. IEEE binary128. Declaring IEEE_DOUBLE_LE instead makes dragon4.c fail to
+# compile ("passing 'npy_longdouble *' to parameter of type 'npy_float64 *'").
+longdouble_format = 'IEEE_QUAD_LE'
+
+[built-in options]
+c_args = ['-fPIC', @ABI_FLAGS@]
+cpp_args = ['-fPIC', @ABI_FLAGS@]
+# SIDE_MODULE makes emscripten emit a loadable shared module rather than a
+# static object — this is what CPython's dlopen (dynload_shlib) consumes.
+c_link_args = ['-sSIDE_MODULE=1', @ABI_FLAGS@]
+cpp_link_args = ['-sSIDE_MODULE=1', @ABI_FLAGS@]

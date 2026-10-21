@@ -1,0 +1,20 @@
+--- a/src/png.imageio/png_pvt.h	2026-10-20 23:55:36
++++ b/src/png.imageio/png_pvt.h	2026-10-20 23:55:36
+@@ -580,6 +580,17 @@
+     }
+ 
+     if (type == TypeDesc::STRING) {
++        // libpng refuses the whole file for one bad tEXt keyword (1-79
++        // bytes of printable Latin-1, no leading, trailing or repeated
++        // spaces): leave such an entry out instead of failing the write.
++        bool keyword_ok = !name.empty() && name.size() <= 79
++                          && name.front() != ' ' && name.back() != ' '
++                          && name.find("  ") == std::string::npos;
++        for (unsigned char c : name)
++            keyword_ok = keyword_ok
++                         && ((c >= 32 && c <= 126) || (c >= 161));
++        if (!keyword_ok)
++            return false;
+         // We can save arbitrary string metadata in multiple png text entries.
+         // Is that ok? Should we also do it for other types by converting to
+         // string?

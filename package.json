@@ -2,6 +2,12 @@
   "name": "blender-wasm",
   "version": "0.0.0",
   "private": true,
+  "scripts": {
+    "doctor": "./build.sh doctor",
+    "build:node": "./build.sh node",
+    "build:browser": "./build.sh browser",
+    "build:web": "./build.sh web"
+  },
   "devDependencies": {
     "playwright": "^1.61.1"
   }

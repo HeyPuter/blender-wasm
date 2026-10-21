@@ -21,7 +21,8 @@ em_cmake "$src" openexr \
   -DOPENEXR_INSTALL_EXAMPLES=OFF \
   -DOPENEXR_INSTALL_TOOLS=OFF \
   -DOPENEXR_FORCE_INTERNAL_DEFLATE=OFF \
-  -DOPENEXR_FORCE_INTERNAL_IMATH=OFF
+  -DOPENEXR_FORCE_INTERNAL_IMATH=OFF \
+  -DOPENEXR_ENABLE_THREADING=$([ "$THREADS" = 1 ] && echo ON || echo OFF)
 
 # Vendored OpenJPH (HTJ2K codec) is built but not installed; OpenEXRCore
 # references its symbols, so stage the static lib for the final link.

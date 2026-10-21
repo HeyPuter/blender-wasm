@@ -8,13 +8,19 @@
 # wasm build runs this native binary for shader codegen (the macros.cmake wiring,
 # blender_wasm_host_tool_native(shader_tool, …), is committed in the fork).
 set -euo pipefail
-ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-SYSROOT="${SYSROOT:-$ROOT/wasm-sysroot}"
-ST="$ROOT/blender/source/blender/gpu/shader_tool"
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
+ST="$BLENDER_SRC/source/blender/gpu/shader_tool"
+CXX_HOST="${CXX_HOST:-$(command -v clang++ || command -v g++)}"
+
+SDK_FLAG=""
+if [ "$(uname -s)" = "Darwin" ]; then
+  SDKROOT="$(xcrun --show-sdk-path 2>/dev/null || true)"
+  [ -n "$SDKROOT" ] && SDK_FLAG="-isysroot $SDKROOT"
+fi
 
 mkdir -p "$SYSROOT/bin"
 ( cd "$ST"
-  g++ -std=c++20 -O2 -I. -Ilexit $(ls *.cc) $(ls lexit/*.cc 2>/dev/null) \
+  "$CXX_HOST" -std=c++20 -O2 $SDK_FLAG -I. -Ilexit $(ls *.cc) $(ls lexit/*.cc 2>/dev/null) \
     -o "$SYSROOT/bin/shader_tool" )
 echo ">> built native shader_tool → $SYSROOT/bin/shader_tool"
 "$SYSROOT/bin/shader_tool" --help >/dev/null 2>&1 || true

@@ -6,16 +6,30 @@ source "$(dirname "$0")/dep_common.sh"
 src=$(fetch_extract \
   "https://github.com/AcademySoftwareFoundation/OpenImageIO/archive/refs/tags/v3.1.13.1.tar.gz" \
   "OpenImageIO-v3.1.13.1.tar.gz" "OpenImageIO-3.1.13.1")
+# patches/oiio/: guarded for the single-threaded build (THREADS=0).
+apply_patches oiio "$src"
 
 # OIIO's platform detection keys on __linux__, which emscripten does not define
 # (it defines __EMSCRIPTEN__). Emscripten's libc is musl-like and provides the
 # needed APIs (unistd, usleep, isatty, strcasecmp_l), so treat emscripten as
 # Linux throughout. Idempotent via sentinel.
 if [ ! -f "$src/.wasm_linux_patched" ]; then
-  grep -rlZ '__linux__' "$src/src" | xargs -0 --no-run-if-empty sed -i \
-    -e 's/defined(__linux__)/(defined(__linux__) || defined(__EMSCRIPTEN__))/g'
-  grep -rlZ '#ifdef __linux__' "$src/src" | xargs -0 --no-run-if-empty sed -i \
-    -e 's/#ifdef __linux__/#if defined(__linux__) || defined(__EMSCRIPTEN__)/g'
+  python3 - <<PYEOF
+import os
+src = "$src/src"
+for root, dirs, files in os.walk(src):
+    for f in files:
+        if f.endswith(('.h', '.hh', '.hpp', '.c', '.cc', '.cpp')):
+            p = os.path.join(root, f)
+            with open(p, 'r', encoding='utf-8', errors='ignore') as fh:
+                content = fh.read()
+            if '__linux__' in content:
+                new_content = content.replace('defined(__linux__)', '(defined(__linux__) || defined(__EMSCRIPTEN__))')
+                new_content = new_content.replace('#ifdef __linux__', '#if defined(__linux__) || defined(__EMSCRIPTEN__)')
+                if new_content != content:
+                    with open(p, 'w', encoding='utf-8') as fh:
+                        fh.write(new_content)
+PYEOF
   touch "$src/.wasm_linux_patched"
 fi
 

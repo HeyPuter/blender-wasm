@@ -1,0 +1,113 @@
+{
+  "name": "@knervous/blender-web",
+  "version": "0.0.6",
+  "description": "Blender compiled to WebAssembly, embedded in the page: ships the runtime and a core adapter that keeps a Babylon.js, Babylon Lite or three.js scene in sync with a persistent in-tab Blender session.",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/knervous/blender-wasm.git",
+    "directory": "packages/blender-web"
+  },
+  "keywords": [
+    "blender",
+    "webassembly",
+    "wasm",
+    "babylonjs",
+    "babylon-lite",
+    "threejs",
+    "gltf",
+    "3d"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/project/index.d.ts",
+      "default": "./dist/project/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "default": "./dist/browser/index.js"
+    },
+    "./ui": {
+      "types": "./dist/ui/index.d.ts",
+      "default": "./dist/ui/index.js"
+    },
+    "./babylon": {
+      "types": "./dist/babylon/index.d.ts",
+      "default": "./dist/babylon/index.js"
+    },
+    "./three": {
+      "types": "./dist/three/index.d.ts",
+      "default": "./dist/three/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "default": "./dist/runtime/index.js"
+    },
+    "./vite": {
+      "types": "./dist/runtime/vite.d.ts",
+      "default": "./dist/runtime/vite.js"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "default": "./dist/node/index.js"
+    },
+    "./protocol.py": "./dist/project/protocol.py",
+    "./package.json": "./package.json",
+    "./lite": {
+      "types": "./dist/lite/index.d.ts",
+      "default": "./dist/lite/index.js"
+    }
+  },
+  "bin": {
+    "blender-web": "bin/blender-web.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "runtime",
+    "README.md",
+    "DESIGN.md",
+    "LICENSE",
+    "THIRD-PARTY-LICENSES.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.15"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "node scripts/build.mjs --generate-only && tsc -p tsconfig.json --noEmit",
+    "prepack": "node scripts/build.mjs --require-runtime",
+    "pack:check": "npm pack --dry-run"
+  },
+  "peerDependencies": {
+    "@babylonjs/core": ">=8",
+    "three": ">=0.160",
+    "vite": ">=5",
+    "@babylonjs/lite": ">=1.33.0"
+  },
+  "peerDependenciesMeta": {
+    "@babylonjs/core": {
+      "optional": true
+    },
+    "three": {
+      "optional": true
+    },
+    "vite": {
+      "optional": true
+    },
+    "@babylonjs/lite": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@babylonjs/core": "^9.31.0",
+    "@babylonjs/lite": "1.36.0",
+    "@types/node": "^22.19.0",
+    "@types/three": "^0.186.0",
+    "three": "^0.186.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4"
+  }
+}

@@ -1,0 +1,635 @@
+diff --git a/source/creator/CMakeLists.txt b/source/creator/CMakeLists.txt
+index 36fdcb27..3bd474d6 100644
+--- a/source/creator/CMakeLists.txt
++++ b/source/creator/CMakeLists.txt
+@@ -149,6 +149,12 @@ set(SRC
+   creator_intern.h
+ )
+ 
++# The embind API of the headless WebAssembly builds; the final link adds
++# -lembind (blender-wasm: scripts/link_blender_headless.sh).
++if(EMSCRIPTEN AND WITH_HEADLESS)
++  list(APPEND SRC bw_api.cc)
++endif()
++
+ if(CMAKE_GENERATOR MATCHES "^Visual Studio.+")
+   # This helps visual studio find the debugger visualizers
+   list(APPEND SRC ${CMAKE_SOURCE_DIR}/tools/utils_ide/natvis/Blender.natvis)
+diff --git a/source/creator/bw_api.cc b/source/creator/bw_api.cc
+new file mode 100644
+index 00000000..70fe21df
+--- /dev/null
++++ b/source/creator/bw_api.cc
+@@ -0,0 +1,561 @@
++/* SPDX-FileCopyrightText: 2026 Blender Authors
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later */
++
++/** \file
++ * \ingroup creator
++ *
++ * The JavaScript API of the headless WebAssembly builds (embind), for hosts
++ * that drive Blender directly rather than through Python scripts:
++ *
++ *   bwGet(path)            an RNA value as JSON, `path` in bpy.data syntax
++ *                          (`objects["Cube"].location`)
++ *   bwSet(path, value)     sets it (number, boolean, string, enum identifier,
++ *                          or an array of numbers) and runs RNA's update
++ *   bwCall(op, props)      runs an operator by idname, props as an object
++ *   bwPython(code)         runs a Python statement (scripts still go here)
++ *   bwObjects()            every object as JSON: bw_id, name, type, parent
++ *   bwMesh(idOrName)       an object's evaluated mesh, in the shape of the
++ *                          project's MeshData (glTF space, unindexed, grouped
++ *                          by material); its arrays view wasm memory until the
++ *                          next bwMesh call
++ *
++ * Every call runs on Blender's thread between requests: the server's poll
++ * loop (creator.cc, BLENDER_WASM_POLL) attaches the context and, in the
++ * pthread build, drains calls proxied here from the worker's thread. In the
++ * single-threaded build the worker only runs while that loop is suspended,
++ * so calls run directly. Values cross threads as plain C++ data; JS values
++ * are made on the calling thread (they are per thread).
++ */
++
++#if defined(__EMSCRIPTEN__) && defined(WITH_HEADLESS)
++
++#  include <algorithm>
++#  include <cstdio>
++#  include <functional>
++#  include <string>
++#  include <variant>
++#  include <vector>
++
++#  include <emscripten/bind.h>
++#  include <emscripten/val.h>
++#  ifdef __EMSCRIPTEN_PTHREADS__
++#    include <emscripten/proxying.h>
++#    include <pthread.h>
++#  endif
++
++#  include "BLI_listbase_iterator.hh"
++#  include "BLI_math_vector_types.hh"
++#  include "BLI_span.hh"
++#  include "BLI_string.hh"
++#  include "BLI_utildefines.hh"
++
++#  include "BKE_attribute.hh"
++#  include "BKE_context.hh"
++#  include "BKE_global.hh"
++#  include "BKE_idprop.hh"
++#  include "BKE_main.hh"
++#  include "BKE_mesh.hh"
++#  include "BKE_object.hh"
++
++#  include "DEG_depsgraph.hh"
++#  include "DEG_depsgraph_query.hh"
++
++#  include "DNA_ID.h"
++#  include "DNA_mesh_types.h"
++#  include "DNA_object_types.h"
++
++#  include "RNA_access.hh"
++#  include "RNA_path.hh"
++
++#  include "WM_api.hh"
++
++#  ifdef WITH_PYTHON
++#    include "BPY_extern_run.hh"
++#  endif
++
++namespace blender::bw {
++
++static bContext *g_context = nullptr;
++#  ifdef __EMSCRIPTEN_PTHREADS__
++static emscripten::ProxyingQueue g_queue;
++static pthread_t g_thread;
++#  endif
++
++/** Runs `fn` on Blender's thread and returns its result. */
++template<typename T> static T on_blender(std::function<T()> fn)
++{
++#  ifdef __EMSCRIPTEN_PTHREADS__
++  if (!pthread_equal(pthread_self(), g_thread)) {
++    T result{};
++    g_queue.proxySync(g_thread, [&]() { result = fn(); });
++    return result;
++  }
++#  endif
++  return fn();
++}
++
++/* --- JSON ------------------------------------------------------------------ */
++static std::string json_string(const std::string &s)
++{
++  std::string out = "\"";
++  for (const char c : s) {
++    switch (c) {
++      case '"': out += "\\\""; break;
++      case '\\': out += "\\\\"; break;
++      case '\n': out += "\\n"; break;
++      case '\r': out += "\\r"; break;
++      case '\t': out += "\\t"; break;
++      default:
++        if (static_cast<unsigned char>(c) < 0x20) {
++          char esc[8];
++          SNPRINTF(esc, "\\u%04x", c);
++          out += esc;
++        }
++        else {
++          out += c;
++        }
++    }
++  }
++  return out + "\"";
++}
++
++static std::string json_number(const double v)
++{
++  char buf[32];
++  SNPRINTF(buf, "%.9g", v);
++  return buf;
++}
++
++/* --- values from JS, as plain data ----------------------------------------- */
++using Value = std::variant<std::monostate, double, bool, std::string, std::vector<double>>;
++
++static Value value_from_js(const emscripten::val &v)
++{
++  const std::string type = v.typeOf().as<std::string>();
++  if (type == "number") {
++    return v.as<double>();
++  }
++  if (type == "boolean") {
++    return v.as<bool>();
++  }
++  if (type == "string") {
++    return v.as<std::string>();
++  }
++  if (v.isArray()) {
++    std::vector<double> out;
++    const int n = v["length"].as<int>();
++    for (int i = 0; i < n; i++) {
++      out.push_back(v[i].as<double>());
++    }
++    return out;
++  }
++  return std::monostate{};
++}
++
++/* --- RNA ------------------------------------------------------------------- */
++static std::string id_name(const ID *id)
++{
++  return id ? std::string(id->name + 2) : std::string();
++}
++
++static std::string property_json(PointerRNA *ptr, PropertyRNA *prop)
++{
++  const int length = RNA_property_array_length(ptr, prop);
++  switch (RNA_property_type(prop)) {
++    case PROP_BOOLEAN: {
++      if (length == 0) {
++        return RNA_property_boolean_get(ptr, prop) ? "true" : "false";
++      }
++      std::vector<char> raw(length);
++      RNA_property_boolean_get_array(ptr, prop, reinterpret_cast<bool *>(raw.data()));
++      std::string out = "[";
++      for (int i = 0; i < length; i++) {
++        out += (i ? "," : "") + std::string(raw[i] ? "true" : "false");
++      }
++      return out + "]";
++    }
++    case PROP_INT: {
++      if (length == 0) {
++        return json_number(RNA_property_int_get(ptr, prop));
++      }
++      std::vector<int> values(length);
++      RNA_property_int_get_array(ptr, prop, values.data());
++      std::string out = "[";
++      for (int i = 0; i < length; i++) {
++        out += (i ? "," : "") + json_number(values[i]);
++      }
++      return out + "]";
++    }
++    case PROP_FLOAT: {
++      if (length == 0) {
++        return json_number(RNA_property_float_get(ptr, prop));
++      }
++      std::vector<float> values(length);
++      RNA_property_float_get_array(ptr, prop, values.data());
++      std::string out = "[";
++      for (int i = 0; i < length; i++) {
++        out += (i ? "," : "") + json_number(values[i]);
++      }
++      return out + "]";
++    }
++    case PROP_STRING:
++      return json_string(RNA_property_string_get(ptr, prop));
++    case PROP_ENUM: {
++      const char *identifier = nullptr;
++      if (RNA_property_enum_identifier(
++              g_context, ptr, prop, RNA_property_enum_get(ptr, prop), &identifier) &&
++          identifier)
++      {
++        return json_string(identifier);
++      }
++      return json_number(RNA_property_enum_get(ptr, prop));
++    }
++    case PROP_POINTER: {
++      PointerRNA target = RNA_property_pointer_get(ptr, prop);
++      if (target.data && RNA_struct_is_ID(target.type)) {
++        return json_string(id_name(static_cast<ID *>(target.data)));
++      }
++      return target.data ? "{}" : "null";
++    }
++    case PROP_COLLECTION:
++      return json_number(RNA_property_collection_length(ptr, prop));
++  }
++  return "null";
++}
++
++static bool property_set(PointerRNA *ptr, PropertyRNA *prop, const Value &value)
++{
++  if (!RNA_property_editable(ptr, prop)) {
++    return false;
++  }
++  const int length = RNA_property_array_length(ptr, prop);
++  const auto *number = std::get_if<double>(&value);
++  const auto *numbers = std::get_if<std::vector<double>>(&value);
++  switch (RNA_property_type(prop)) {
++    case PROP_BOOLEAN:
++      if (const auto *b = std::get_if<bool>(&value); b && length == 0) {
++        RNA_property_boolean_set(ptr, prop, *b);
++        return true;
++      }
++      return false;
++    case PROP_INT:
++      if (number && length == 0) {
++        RNA_property_int_set(ptr, prop, int(*number));
++        return true;
++      }
++      if (numbers && int(numbers->size()) == length) {
++        std::vector<int> v(numbers->begin(), numbers->end());
++        RNA_property_int_set_array(ptr, prop, v.data());
++        return true;
++      }
++      return false;
++    case PROP_FLOAT:
++      if (number && length == 0) {
++        RNA_property_float_set(ptr, prop, float(*number));
++        return true;
++      }
++      if (numbers && int(numbers->size()) == length) {
++        std::vector<float> v(numbers->begin(), numbers->end());
++        RNA_property_float_set_array(ptr, prop, v.data());
++        return true;
++      }
++      return false;
++    case PROP_STRING:
++      if (const auto *s = std::get_if<std::string>(&value)) {
++        RNA_property_string_set(ptr, prop, s->c_str());
++        return true;
++      }
++      return false;
++    case PROP_ENUM:
++      if (const auto *s = std::get_if<std::string>(&value)) {
++        int v;
++        if (RNA_property_enum_value(g_context, ptr, prop, s->c_str(), &v)) {
++          RNA_property_enum_set(ptr, prop, v);
++          return true;
++        }
++      }
++      return false;
++    default:
++      return false;
++  }
++}
++
++static std::string get(std::string path)
++{
++  return on_blender<std::string>([path]() -> std::string {
++    if (!g_context || !G_MAIN) {
++      return "null";
++    }
++    PointerRNA main = RNA_main_pointer_create(G_MAIN);
++    PointerRNA ptr;
++    PropertyRNA *prop = nullptr;
++    if (!RNA_path_resolve_property(&main, path.c_str(), &ptr, &prop) || !prop) {
++      return "null";
++    }
++    return property_json(&ptr, prop);
++  });
++}
++
++static bool set(std::string path, emscripten::val js_value)
++{
++  const Value value = value_from_js(js_value);
++  return on_blender<bool>([path, value]() -> bool {
++    if (!g_context || !G_MAIN) {
++      return false;
++    }
++    PointerRNA main = RNA_main_pointer_create(G_MAIN);
++    PointerRNA ptr;
++    PropertyRNA *prop = nullptr;
++    if (!RNA_path_resolve_property(&main, path.c_str(), &ptr, &prop) || !prop) {
++      return false;
++    }
++    if (!property_set(&ptr, prop, value)) {
++      return false;
++    }
++    RNA_property_update(g_context, &ptr, prop);
++    return true;
++  });
++}
++
++static std::string call(std::string idname, emscripten::val js_props)
++{
++  std::vector<std::pair<std::string, Value>> props;
++  if (js_props.typeOf().as<std::string>() == "object" && !js_props.isNull()) {
++    const emscripten::val keys = emscripten::val::global("Object").call<emscripten::val>("keys", js_props);
++    const int n = keys["length"].as<int>();
++    for (int i = 0; i < n; i++) {
++      const std::string key = keys[i].as<std::string>();
++      props.emplace_back(key, value_from_js(js_props[key]));
++    }
++  }
++  return on_blender<std::string>([idname, props]() -> std::string {
++    wmOperatorType *ot = g_context ? WM_operatortype_find(idname.c_str(), true) : nullptr;
++    if (!ot) {
++      return "NOT_FOUND";
++    }
++    PointerRNA ptr = WM_operator_properties_create_ptr(ot);
++    for (const auto &[key, value] : props) {
++      if (PropertyRNA *prop = RNA_struct_find_property(&ptr, key.c_str())) {
++        property_set(&ptr, prop, value);
++      }
++    }
++    const wmOperatorStatus status = WM_operator_name_call_ptr(
++        g_context, ot, wm::OpCallContext::ExecDefault, &ptr, nullptr);
++    WM_operator_properties_free(&ptr);
++    if (status & OPERATOR_FINISHED) {
++      return "FINISHED";
++    }
++    if (status & OPERATOR_CANCELLED) {
++      return "CANCELLED";
++    }
++    return "PASS_THROUGH";
++  });
++}
++
++static bool python(std::string code)
++{
++  return on_blender<bool>([code]() -> bool {
++#  ifdef WITH_PYTHON
++    return g_context && BPY_run_string_exec(g_context, nullptr, code.c_str());
++#  else
++    UNUSED_VARS(code);
++    return false;
++#  endif
++  });
++}
++
++static std::string bw_id_of(const Object *ob)
++{
++  if (!ob || !ob->id.properties) {
++    return std::string();
++  }
++  const IDProperty *prop = IDP_GetPropertyFromGroup(ob->id.properties, "bw_id");
++  return (prop && prop->type == IDP_STRING) ? std::string(IDP_string_get(prop)) : std::string();
++}
++
++static const char *object_kind(const Object *ob)
++{
++  switch (ob->type) {
++    case OB_MESH: return "mesh";
++    case OB_EMPTY: return "empty";
++    case OB_LAMP: return "light";
++    case OB_CAMERA: return "camera";
++    default: return "other";
++  }
++}
++
++static std::string objects()
++{
++  return on_blender<std::string>([]() -> std::string {
++    if (!G_MAIN) {
++      return "[]";
++    }
++    std::string out = "[";
++    bool first = true;
++    for (Object &object : G_MAIN->objects) {
++      Object *ob = &object;
++      const std::string id = bw_id_of(ob);
++      const std::string parent = ob->parent ? bw_id_of(ob->parent) : std::string();
++      out += first ? "" : ",";
++      first = false;
++      out += "{\"id\":" + (id.empty() ? std::string("null") : json_string(id));
++      out += ",\"name\":" + json_string(id_name(&ob->id));
++      out += ",\"kind\":" + json_string(object_kind(ob));
++      out += ",\"parent\":" + (ob->parent ? json_string(parent.empty() ? id_name(&ob->parent->id) : parent) : std::string("null"));
++      out += "}";
++    }
++    return out + "]";
++  });
++}
++
++/* --- evaluated mesh ---------------------------------------------------------- */
++struct MeshView {
++  bool ok = false;
++  int vertex_count = 0;
++  bool has_uv = false;
++  std::vector<int> groups; /* slot, start, count, ... */
++};
++static std::vector<float> g_positions, g_normals, g_uvs;
++
++static MeshView read_mesh(const std::string &key)
++{
++  MeshView view;
++  if (!g_context || !G_MAIN) {
++    return view;
++  }
++  Object *found = nullptr;
++  for (Object &ob : G_MAIN->objects) {
++    if (bw_id_of(&ob) == key || id_name(&ob.id) == key) {
++      found = &ob;
++      break;
++    }
++  }
++  if (!found || found->type != OB_MESH) {
++    return view;
++  }
++  Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(g_context);
++  const Object *ob_eval = DEG_get_evaluated(depsgraph, found);
++  const Mesh *mesh = ob_eval ? BKE_object_get_evaluated_mesh(ob_eval) : nullptr;
++  if (!mesh) {
++    return view;
++  }
++  const Span<float3> positions = mesh->vert_positions();
++  const Span<int> corner_verts = mesh->corner_verts();
++  const Span<int3> tris = mesh->corner_tris();
++  const Span<int> tri_faces = mesh->corner_tri_faces();
++  const Span<float3> normals = mesh->corner_normals();
++  const bke::AttributeAccessor attributes = mesh->attributes();
++  const VArray<int> materials = *attributes.lookup_or_default<int>(
++      "material_index", bke::AttrDomain::Face, 0);
++  const StringRefNull uv_name = mesh->active_uv_map_name();
++  const VArray<float2> uvs = uv_name.is_empty() ?
++                                 VArray<float2>() :
++                                 *attributes.lookup<float2>(uv_name, bke::AttrDomain::Corner);
++  view.has_uv = bool(uvs);
++
++  /* Triangles in material order (a counting sort), then emitted unindexed. */
++  int max_slot = 0;
++  for (const int tri : tris.index_range()) {
++    max_slot = std::max(max_slot, materials[tri_faces[tri]]);
++  }
++  std::vector<std::vector<int>> by_slot(max_slot + 1);
++  for (const int tri : tris.index_range()) {
++    by_slot[std::max(0, materials[tri_faces[tri]])].push_back(tri);
++  }
++  const int n = int(tris.size()) * 3;
++  g_positions.assign(n * 3, 0.0f);
++  g_normals.assign(n * 3, 0.0f);
++  g_uvs.assign(view.has_uv ? n * 2 : 0, 0.0f);
++  int v = 0;
++  for (int slot = 0; slot <= max_slot; slot++) {
++    if (by_slot[slot].empty()) {
++      continue;
++    }
++    view.groups.insert(view.groups.end(), {slot, v, int(by_slot[slot].size()) * 3});
++    for (const int tri : by_slot[slot]) {
++      for (int k = 0; k < 3; k++, v++) {
++        const int corner = tris[tri][k];
++        const float3 &p = positions[corner_verts[corner]];
++        const float3 &nrm = normals[corner];
++        /* Blender's Z-up to glTF's Y-up, as protocol.py does. */
++        g_positions[v * 3 + 0] = p.x;
++        g_positions[v * 3 + 1] = p.z;
++        g_positions[v * 3 + 2] = -p.y;
++        g_normals[v * 3 + 0] = nrm.x;
++        g_normals[v * 3 + 1] = nrm.z;
++        g_normals[v * 3 + 2] = -nrm.y;
++        if (view.has_uv) {
++          const float2 uv = uvs[corner];
++          g_uvs[v * 2 + 0] = uv.x;
++          g_uvs[v * 2 + 1] = 1.0f - uv.y;
++        }
++      }
++    }
++  }
++  view.vertex_count = n;
++  view.ok = true;
++  return view;
++}
++
++static emscripten::val mesh(std::string key)
++{
++  const MeshView view = on_blender<MeshView>([key]() { return read_mesh(key); });
++  if (!view.ok) {
++    return emscripten::val::null();
++  }
++  using emscripten::typed_memory_view;
++  emscripten::val out = emscripten::val::object();
++  out.set("vertexCount", view.vertex_count);
++  out.set("positions", emscripten::val(typed_memory_view(g_positions.size(), g_positions.data())));
++  out.set("normals", emscripten::val(typed_memory_view(g_normals.size(), g_normals.data())));
++  if (view.has_uv) {
++    out.set("uvs", emscripten::val(typed_memory_view(g_uvs.size(), g_uvs.data())));
++  }
++  emscripten::val groups = emscripten::val::array();
++  for (size_t i = 0; i + 2 < view.groups.size(); i += 3) {
++    emscripten::val group = emscripten::val::array();
++    group.call<void>("push", view.groups[i], view.groups[i + 1], view.groups[i + 2]);
++    groups.call<void>("push", group);
++  }
++  out.set("groups", groups);
++  return out;
++}
++
++static std::string version()
++{
++  return "1";
++}
++
++}  // namespace blender::bw
++
++/** Called on Blender's thread by the server's poll loop before it starts. */
++extern "C" void bw_api_attach(blender::bContext *C)
++{
++  blender::bw::g_context = C;
++#  ifdef __EMSCRIPTEN_PTHREADS__
++  blender::bw::g_thread = pthread_self();
++#  endif
++}
++
++/** Called on Blender's thread by the poll loop each tick: runs proxied API calls. */
++extern "C" void bw_api_drain()
++{
++#  ifdef __EMSCRIPTEN_PTHREADS__
++  blender::bw::g_queue.execute();
++#  endif
++}
++
++EMSCRIPTEN_BINDINGS(blender_web)
++{
++  using namespace blender::bw;
++  emscripten::function("bwVersion", &version);
++  emscripten::function("bwGet", &get);
++  emscripten::function("bwSet", &set);
++  emscripten::function("bwCall", &call);
++  emscripten::function("bwPython", &python);
++  emscripten::function("bwObjects", &objects);
++  emscripten::function("bwMesh", &mesh);
++}
++
++#endif /* __EMSCRIPTEN__ && WITH_HEADLESS */
+diff --git a/source/creator/creator.cc b/source/creator/creator.cc
+index 6ec7acd4..ef7c96d5 100644
+--- a/source/creator/creator.cc
++++ b/source/creator/creator.cc
+@@ -119,6 +119,17 @@ extern "C" EMSCRIPTEN_KEEPALIVE int blender_web_mount_provider(int mountId, cons
+ 
+ #include "WM_api.hh"
+ 
++#if defined(__EMSCRIPTEN__) && defined(WITH_PYTHON) && defined(WITH_HEADLESS)
++#  include "BPY_extern_run.hh"
++#  include <unistd.h>
++/* bw_api.cc: the embind API's context, and its calls proxied from the worker. */
++namespace blender {
++struct bContext;
++}
++extern "C" void bw_api_attach(blender::bContext *C);
++extern "C" void bw_api_drain();
++#endif
++
+ #include "RNA_define.hh"
+ 
+ #include "FN_init.hh"
+@@ -810,6 +821,28 @@ int main(int argc,
+     else {
+       exit_code = G.is_break ? EXIT_FAILURE : EXIT_SUCCESS;
+     }
++#if defined(__EMSCRIPTEN__) && defined(WITH_PYTHON) && defined(WITH_HEADLESS)
++    /* Headless WebAssembly served by a host: when `BLENDER_WASM_POLL` holds a Python
++     * statement, Blender stays alive running it, sleeping `BLENDER_WASM_POLL_MS` (default 1)
++     * between runs, and runs the embind API's calls (bw_api.cc) in between, on this thread.
++     * Single-threaded builds (JSPI) suspend in the sleep, which is when the host's messages
++     * are handled; the poll runs from here, not from a Python loop, so only WebAssembly
++     * frames are on the stack when it suspends. Pthread builds sleep on their own thread. */
++    if (const char *poll = getenv("BLENDER_WASM_POLL")) {
++      const char *interval_env = getenv("BLENDER_WASM_POLL_MS");
++      const int interval_ms = interval_env ? atoi(interval_env) : 1;
++      bw_api_attach(C);
++      for (;;) {
++        BPY_run_string_exec(C, nullptr, poll);
++        bw_api_drain();
++#  ifdef BLI_THREADS_INLINE
++        emscripten_sleep(interval_ms);
++#  else
++        usleep(useconds_t(interval_ms) * 1000);
++#  endif
++      }
++    }
++#endif
+     /* Using window-manager API in background-mode is a bit odd, but works fine. */
+     WM_exit(C, exit_code);
+   }

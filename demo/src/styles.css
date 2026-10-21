@@ -703,3 +703,49 @@ input {
     font-size: 16px;
   }
 }
+
+/* An embedding host owns the surrounding chrome and actions. The embedded runtime starts
+ * automatically, so show only a quiet bootstrap indicator over the future
+ * canvas instead of the public Puter landing/launch experience. */
+html[data-embed="true"] #splash {
+  background: #181818;
+}
+
+html[data-embed="true"] .top-nav,
+html[data-embed="true"] .logo-lockup,
+html[data-embed="true"] .splash-title,
+html[data-embed="true"] .project-copy,
+html[data-embed="true"] .panel-ready,
+html[data-embed="true"] .gpu-warning,
+html[data-embed="true"] .startup-console,
+html[data-embed="true"] .credit-badge {
+  display: none !important;
+}
+
+html[data-embed="true"] .stage {
+  padding: 24px;
+}
+
+html[data-embed="true"] .stage-inner,
+html[data-embed="true"] .launch-panel {
+  max-width: 320px;
+}
+
+html[data-embed="true"] .launch-panel {
+  min-height: 0;
+  margin: 0;
+}
+
+html[data-embed="true"] .panel-loading {
+  display: flex !important;
+}
+
+html[data-embed="true"] .progress-track {
+  height: 4px;
+  background: #303030;
+}
+
+html[data-embed="true"] .progress-meta,
+html[data-embed="true"] .splash-status {
+  color: #b8b8b8;
+}

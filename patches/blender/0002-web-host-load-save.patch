@@ -1,0 +1,91 @@
+diff --git a/source/blender/windowmanager/intern/wm_files.cc b/source/blender/windowmanager/intern/wm_files.cc
+index 3ebf1143..08db60ca 100644
+--- a/source/blender/windowmanager/intern/wm_files.cc
++++ b/source/blender/windowmanager/intern/wm_files.cc
+@@ -3308,8 +3308,86 @@ static void wm_web_reinvoke_with_window(bContext *C, const char *opname, bool *r
+   CTX_wm_region_set(C, prev_region);
+ }
+ 
++/* Host load/save, for a page embedding this UI: the page stages a .blend in the
++ * FS and asks Blender to open it, or asks for a copy of the session at a path.
++ * Both run on the next main-loop tick, on Blender's thread, through the open
++ * and save operators (no file browser, no prompt); the page hears back through
++ * `Module.onBlenderHostFile(kind, path, ok)` on its own thread. */
++static char g_web_host_load_path[1024] = {0};
++static volatile int g_web_host_load_pending = 0;
++static char g_web_host_save_path[1024] = {0};
++static volatile int g_web_host_save_pending = 0;
++
++extern "C" EMSCRIPTEN_KEEPALIVE void blender_web_host_load(const char *path)
++{
++  BLI_strncpy(g_web_host_load_path, path ? path : "", sizeof(g_web_host_load_path));
++  g_web_host_load_pending = 1;
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE void blender_web_host_save(const char *path)
++{
++  BLI_strncpy(g_web_host_save_path, path ? path : "", sizeof(g_web_host_save_path));
++  g_web_host_save_pending = 1;
++}
++
++/* Runs a file operator by name with a filepath, in the first window's context. */
++static bool wm_web_host_file_op(bContext *C, const char *opname, const char *filepath, bool save)
++{
++  wmWindowManager *wm = CTX_wm_manager(C);
++  wmOperatorType *ot = WM_operatortype_find(opname, false);
++  if (wm == nullptr || ot == nullptr || BLI_listbase_is_empty(&wm->windows)) {
++    return false;
++  }
++  wmWindow *prev_win = CTX_wm_window(C);
++  ScrArea *prev_area = CTX_wm_area(C);
++  ARegion *prev_region = CTX_wm_region(C);
++  CTX_wm_window_set(C, static_cast<wmWindow *>(wm->windows.first));
++  PointerRNA props = WM_operator_properties_create_ptr(ot);
++  RNA_string_set(&props, "filepath", filepath);
++  if (save) {
++    RNA_boolean_set(&props, "copy", true);
++    RNA_boolean_set(&props, "check_existing", false);
++  }
++  else {
++    RNA_boolean_set(&props, "load_ui", false);
++  }
++  const wmOperatorStatus status = WM_operator_name_call_ptr(
++      C, ot, wm::OpCallContext::ExecDefault, &props, nullptr);
++  WM_operator_properties_free(&props);
++  if (save) {
++    /* Opening a file replaces the window manager; only restore after a save. */
++    CTX_wm_window_set(C, prev_win);
++    CTX_wm_area_set(C, prev_area);
++    CTX_wm_region_set(C, prev_region);
++  }
++  return status & OPERATOR_FINISHED;
++}
++
++static void wm_web_host_notify(const char *kind, const char *path, bool ok)
++{
++  MAIN_THREAD_ASYNC_EM_ASM(
++      {
++        if (Module.onBlenderHostFile) {
++          Module.onBlenderHostFile(UTF8ToString($0), UTF8ToString($1), $2 !== 0);
++        }
++      },
++      kind,
++      path,
++      ok ? 1 : 0);
++}
++
+ void wm_web_poll_pending_file_open(bContext *C)
+ {
++  if (g_web_host_load_pending) {
++    g_web_host_load_pending = 0;
++    const bool ok = wm_web_host_file_op(C, "WM_OT_open_mainfile", g_web_host_load_path, false);
++    wm_web_host_notify("load", g_web_host_load_path, ok);
++  }
++  if (g_web_host_save_pending) {
++    g_web_host_save_pending = 0;
++    const bool ok = wm_web_host_file_op(C, "WM_OT_save_as_mainfile", g_web_host_save_path, true);
++    wm_web_host_notify("save", g_web_host_save_path, ok);
++  }
+   if (g_web_open_pending) {
+     g_web_open_pending = 0;
+     /* Re-invoke Open; discard-changes → select-file-path opens the browser at

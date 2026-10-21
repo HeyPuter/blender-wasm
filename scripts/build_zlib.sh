@@ -19,8 +19,8 @@ make distclean >/dev/null 2>&1 || true
 # Keep the same ABI flags as every other dep so the final link agrees.
 export CFLAGS="$WASM_CFLAGS"
 emconfigure ./configure --static --prefix="$SYSROOT"
-emmake make -j"$NPROC" libz.a
-emmake make install
+emmake make -j"$NPROC" AR="emar" ARFLAGS="rc" libz.a
+emmake make AR="emar" ARFLAGS="rc" install
 # Drop any shared remnants so downstream links resolve to the static libz.a only.
 rm -f "$SYSROOT"/lib/libz.so*
 log "done"

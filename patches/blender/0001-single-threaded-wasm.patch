@@ -1,0 +1,117 @@
+diff --git a/source/blender/blenkernel/intern/sound.cc b/source/blender/blenkernel/intern/sound.cc
+index 0a867941..c9af0de1 100644
+--- a/source/blender/blenkernel/intern/sound.cc
++++ b/source/blender/blenkernel/intern/sound.cc
+@@ -485,6 +485,10 @@ static void sound_device_use_end()
+  */
+ static bool sound_use_close_thread()
+ {
++#  ifdef BLI_THREADS_INLINE
++  /* No thread can start. */
++  return false;
++#  endif
+   /* No point starting a thread if sound is disabled and we're running headless. */
+   if (g_state.force_device && STREQ(g_state.force_device, "None")) {
+ #  if defined(WITH_PYTHON_MODULE) || defined(WITH_HEADLESS)
+diff --git a/source/blender/blenlib/BLI_threads.hh b/source/blender/blenlib/BLI_threads.hh
+index 0d711a66..47cbef41 100644
+--- a/source/blender/blenlib/BLI_threads.hh
++++ b/source/blender/blenlib/BLI_threads.hh
+@@ -10,6 +10,13 @@
+ 
+ #include <pthread.h>
+ 
++/* Single-threaded WebAssembly (emscripten without `-pthread`): no thread can be started.
++ * Thread pools run each task inline when it is inserted, the system reports one thread, and
++ * the locks below work on the one thread there is. Builds with threads are unaffected. */
++#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
++#  define BLI_THREADS_INLINE
++#endif
++
+ #include "BLI_listbase.hh"
+ #include "BLI_sys_types.hh"
+ 
+diff --git a/source/blender/blenlib/intern/task_pool.cc b/source/blender/blenlib/intern/task_pool.cc
+index eaa0307b..1b232102 100644
+--- a/source/blender/blenlib/intern/task_pool.cc
++++ b/source/blender/blenlib/intern/task_pool.cc
+@@ -189,6 +189,13 @@ struct TaskPool {
+     if (this->type == TASK_POOL_BACKGROUND && this->use_threads) {
+       this->type = TASK_POOL_TBB;
+     }
++#ifdef BLI_THREADS_INLINE
++    /* A background pool's worker waits on its queue for more work, which on the only thread
++     * there is would never return: run its tasks as they are pushed instead. */
++    if (ELEM(this->type, TASK_POOL_BACKGROUND, TASK_POOL_BACKGROUND_SERIAL)) {
++      this->type = TASK_POOL_NO_THREADS;
++    }
++#endif
+ 
+     switch (this->type) {
+       case TASK_POOL_TBB:
+diff --git a/source/blender/blenlib/intern/threads.cc b/source/blender/blenlib/intern/threads.cc
+index 950ca9a8..b4ca2599 100644
+--- a/source/blender/blenlib/intern/threads.cc
++++ b/source/blender/blenlib/intern/threads.cc
+@@ -186,9 +186,17 @@ void BLI_threadpool_insert(ListBaseT<ThreadSlot> *threadbase, void *callerdata)
+ {
+   for (ThreadSlot &tslot : *threadbase) {
+     if (tslot.avail) {
++#ifdef BLI_THREADS_INLINE
++      /* The task runs to completion here and the slot stays available, so the remove, clear
++       * and end calls below find nothing to join. */
++      tslot.callerdata = callerdata;
++      tslot_thread_start(&tslot);
++      tslot.callerdata = nullptr;
++#else
+       tslot.avail = 0;
+       tslot.callerdata = callerdata;
+       pthread_create(&tslot.pthread, nullptr, tslot_thread_start, &tslot);
++#endif
+       return;
+     }
+   }
+@@ -262,6 +270,11 @@ int BLI_system_thread_count()
+     return t;
+   }
+ 
++#ifdef BLI_THREADS_INLINE
++  t = 1;
++  return t;
++#endif
++
+   {
+ #ifdef WIN32
+     SYSTEM_INFO info;
+diff --git a/source/blender/imbuf/intern/oiio/openimageio_api.cpp b/source/blender/imbuf/intern/oiio/openimageio_api.cpp
+index 129f6b52..cb082508 100644
+--- a/source/blender/imbuf/intern/oiio/openimageio_api.cpp
++++ b/source/blender/imbuf/intern/oiio/openimageio_api.cpp
+@@ -23,6 +23,10 @@ void OIIO_init()
+   if (threads_override) {
+     OIIO::attribute("threads", threads_override);
+   }
++#ifdef BLI_THREADS_INLINE
++  /* One thread: OIIO works on the calling thread and starts no pool. */
++  OIIO::attribute("threads", 1);
++#endif
+ 
+   /* As of OpenEXR 3.2.1 there are still issues related to the use of OpenEXR Core. */
+   OIIO::attribute("openexr:core", 0);
+diff --git a/source/blender/imbuf/intern/openexr/openexr_api.cpp b/source/blender/imbuf/intern/openexr/openexr_api.cpp
+index 600ed5f4..a55ca18b 100644
+--- a/source/blender/imbuf/intern/openexr/openexr_api.cpp
++++ b/source/blender/imbuf/intern/openexr/openexr_api.cpp
+@@ -2638,7 +2638,12 @@ void imb_initopenexr()
+   /* In a multithreaded program, staticInitialize() must be called once during startup, before the
+    * program accesses any other functions or classes in the IlmImf library. */
+   Imf::staticInitialize();
++#ifdef BLI_THREADS_INLINE
++  /* No worker threads: OpenEXR then does its work on the calling thread. */
++  Imf::setGlobalThreadCount(0);
++#else
+   Imf::setGlobalThreadCount(BLI_system_thread_count());
++#endif
+ }
+ 
+ void imb_exitopenexr()

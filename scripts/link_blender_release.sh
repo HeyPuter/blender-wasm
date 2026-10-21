@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Release/demo link: like link_blender_web.sh but with NO --preload-file —
+# (OPTIMIZE=1 runs scripts/optimize_wasm.sh on the module before compressing it.)
 # the demo app (demo/) extracts assets into OPFS once (setup screen) and the
 # wasm mounts them via the wasmfs OPFS backend (BLENDER_WEB_OPFS env, see
 # creator.cc). Outputs into demo/public/:
@@ -15,41 +16,31 @@
 #          The canvas stays on the browser main thread, where wink runs the
 #          driver; Blender's pthreads marshal GL to it (no OffscreenCanvas).
 #   webgpu the custom WebGPU GPU backend (cmake/blender-wasm-cache.cmake,
-#          build tree build-blender); the canvas is transferred to the
-#          Blender pthread as an OffscreenCanvas.
+#          build tree build-blender; `./build.sh web` passes this); the canvas
+#          is transferred to the Blender pthread as an OffscreenCanvas.
+# BLENDER_BUILD (or BUILD) overrides the build tree either way.
 set -euo pipefail
-ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-export PATH="$ROOT/emsdk/upstream/emscripten:$PATH"
 BLENDER_GPU="${BLENDER_GPU:-gl}"
 case "$BLENDER_GPU" in
-  gl)     BUILD="${BUILD:-$ROOT/build-blender-gl}" ;;
-  webgpu) BUILD="${BUILD:-$ROOT/build-blender}" ;;
+  gl)     BLENDER_BUILD="${BLENDER_BUILD:-${BUILD:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/build-blender-gl}}" ;;
+  webgpu) BLENDER_BUILD="${BLENDER_BUILD:-${BUILD:-}}" ;;
   *) echo "BLENDER_GPU must be gl or webgpu" >&2; exit 1 ;;
 esac
+[ -n "$BLENDER_BUILD" ] && export BLENDER_BUILD || unset BLENDER_BUILD
+source "$(dirname "${BASH_SOURCE[0]}")/link_common.sh"
 OUT="${OUT:-$ROOT/demo/public}"
-SYSROOT="$ROOT/wasm-sysroot"
 STAGE="$ROOT/demo/.stage"
+LINK_OPT="${LINK_OPT:--O1}"
+ZSTD_LEVEL="${ZSTD_LEVEL:-21}"
 
 mkdir -p "$OUT"
 
-# --- stage runtime assets (same trims as the dev script) --------------------
-echo ">> staging assets -> $STAGE"
-rm -rf "$STAGE"; mkdir -p "$STAGE/5.3" "$STAGE/lib"
-cp -r "$ROOT/blender/scripts"           "$STAGE/5.3/scripts"
-cp -r "$ROOT/blender/release/datafiles" "$STAGE/5.3/datafiles"
-# Cycles' Python add-on lives with its sources, not in scripts/ (CMake installs
-# it); without it the engine is compiled in but cannot be selected.
-if grep -q "^WITH_CYCLES:BOOL=ON" "$BUILD/CMakeCache.txt" 2>/dev/null; then
-  cp -r "$ROOT/blender/intern/cycles/blender/addon" "$STAGE/5.3/scripts/addons_core/cycles"
-  find "$STAGE/5.3/scripts/addons_core/cycles" -name '__pycache__' -type d -prune -exec rm -rf {} +
-fi
+# --- stage runtime assets ------------------------------------------------------
 # Python under lib/python3.13 so PYTHONHOME=/opfs/assets resolves the stdlib.
-cp -r "$SYSROOT/lib/python3.13" "$STAGE/lib/python3.13"
-( cd "$STAGE/lib/python3.13" && rm -rf test tests idlelib lib2to3 turtledemo tkinter \
-    config-3.13-wasm32-emscripten ensurepip \
-    && find . -name '__pycache__' -type d -prune -exec rm -rf {} + )
-rm -f "$STAGE/5.3/datafiles/splash_template.xcf"
-python3 "$ROOT/scripts/trim_ocio.py" "$STAGE/5.3/datafiles/colormanagement"
+stage_assets "$STAGE" lib/python3.13
+stage_cycles_addon "$STAGE"
+python3 "$ROOT/scripts/trim_ocio.py" "$STAGE/$BLENDER_VERSION_DIR/datafiles/colormanagement"
+precompile_python "$STAGE/$BLENDER_VERSION_DIR/scripts" "$STAGE/lib/python3.13"
 
 # --- essentials brush assets -> 5.3/datafiles/assets/brushes -----------------
 # Blender 4.3+ ships sculpt/paint brushes as ID *assets* in the bundled
@@ -71,22 +62,22 @@ python3 "$ROOT/scripts/trim_ocio.py" "$STAGE/5.3/datafiles/colormanagement"
 # always present in CI. Fall back to blender/assets (dev checkout with LFS) or
 # the on-disk native reference only if the vendored copy is somehow missing.
 if [ "${BLENDER_WEB_BUNDLE_BRUSHES:-1}" != "0" ]; then
-  ASSETS_DST="$STAGE/5.3/datafiles/assets"
+  ASSETS_DST="$STAGE/$BLENDER_VERSION_DIR/datafiles/assets"
   sculpt_name="brushes/essentials_brushes-mesh_sculpt.blend"
   ASSETS_SRC=""
   for cand in \
       "$ROOT/demo/brush-assets" \
-      "$ROOT/blender/assets" \
-      $(ls -d "$ROOT"/tests/native/blender-*/5.3/datafiles/assets 2>/dev/null | head -1); do
+      "$BLENDER_SRC/assets" \
+      $(ls -d "$ROOT"/tests/native/blender-*/"$BLENDER_VERSION_DIR"/datafiles/assets 2>/dev/null | head -1); do
     if [ -n "$cand" ] && [ "$(stat -c%s "$cand/$sculpt_name" 2>/dev/null || echo 0)" -ge 1024 ]; then
       ASSETS_SRC="$cand"; break
     fi
   done
   # Last resort for a dev checkout: materialize the LFS content in blender/assets.
-  if [ -z "$ASSETS_SRC" ] && [ -e "$ROOT/blender/assets/$sculpt_name" ]; then
-    ( cd "$ROOT/blender" && git lfs pull --include="assets/brushes/**" ) 2>/dev/null || true
-    [ "$(stat -c%s "$ROOT/blender/assets/$sculpt_name" 2>/dev/null || echo 0)" -ge 1024 ] && \
-      ASSETS_SRC="$ROOT/blender/assets"
+  if [ -z "$ASSETS_SRC" ] && [ -e "$BLENDER_SRC/assets/$sculpt_name" ]; then
+    ( cd "$BLENDER_SRC" && git lfs pull --include="assets/brushes/**" ) 2>/dev/null || true
+    [ "$(stat -c%s "$BLENDER_SRC/assets/$sculpt_name" 2>/dev/null || echo 0)" -ge 1024 ] && \
+      ASSETS_SRC="$BLENDER_SRC/assets"
   fi
   echo ">> brush asset source: ${ASSETS_SRC:-<none found>}"
   sculpt_blend="$ASSETS_SRC/$sculpt_name"
@@ -107,17 +98,13 @@ else
 fi
 
 # --- assets.tar.zst ----------------------------------------------------------
-echo ">> assets.tar.zst (zstd --ultra -21 -T0)"
-( cd "$STAGE" && tar -cf "$OUT/assets.tar" 5.3 lib )
-zstd -f --ultra -21 -T0 "$OUT/assets.tar" -o "$OUT/assets.tar.zst"
+log "assets.tar.zst (zstd --ultra -$ZSTD_LEVEL -T0)"
+( cd "$STAGE" && tar -cf "$OUT/assets.tar" "$BLENDER_VERSION_DIR" lib )
+zstd -f --ultra -"$ZSTD_LEVEL" -T0 "$OUT/assets.tar" -o "$OUT/assets.tar.zst"
 rm -f "$OUT/assets.tar"
 
 # --- link without preload ----------------------------------------------------
-raw=$(ninja -C "$BUILD" -t commands blender | grep -- "-o bin/blender.js" | tail -1)
-cmd=${raw#*&& }
-cmd=${cmd%% && cd *}
-cmd=${cmd/-o bin\/blender.js/-o $OUT/blender.js}
-cmd=${cmd//-sNODERAWFS=1/}
+cmd=$(cmake_link_cmd "$OUT/blender.js")
 
 # Custom wasmfs backends (compiled against emscripten's internal wasmfs headers):
 #  - localdir_backend.cpp: lazy async mount of a user-picked folder (open/save).
@@ -125,27 +112,39 @@ cmd=${cmd//-sNODERAWFS=1/}
 #    verbatim — serves /assets from the in-memory decompressed tar
 #    (Module.geckoProviders[0], built in demo/src/main.js). Zero-copy: files are
 #    views into the one decompressed buffer, materialized on open.
-WASMFS_INC="$ROOT/emsdk/upstream/emscripten/system/lib/wasmfs"
+WASMFS_INC="$EM_BIN/system/lib/wasmfs"
 
 if [ "$BLENDER_GPU" = gl ]; then
   # wink: Mesa (st/mesa + gex_wgpu + GLSL/NIR), emdawnwebgpu's webgpu.cpp and
   # Tint, plus their JS libraries in the order wink's manifest lists them.
   # (scripts/build_wink.sh.) The build tree's CMAKE_EXE_LINKER_FLAGS are empty,
-  # so the extra system ports / libs the WebGPU tree carried there come here.
-  WINK="$ROOT/wasm-sysroot/wink"
+  # so the extra system ports / libs the WebGPU tree carried there come here
+  # (brotli comes with EXTRA_LINK_LIBS).
+  WINK="$SYSROOT/wink"
   GPU_FLAGS="$WINK/lib/libwink.a $WINK/lib/libwink_webgpu.a $WINK/lib/libwink_tint.a \
     $(python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); print(" ".join("--js-library "+sys.argv[2]+"/"+j for j in m["link"]["js_libraries"]))' "$WINK/manifest.json" "$WINK") \
     -sWASM_BIGINT=1 \
     -sEXPORTED_FUNCTIONS=_main,_malloc,_free \
-    --use-port=sqlite3 --use-port=bzip2 -Wl,--allow-multiple-definition \
-    $SYSROOT/lib/libbrotlidec.a $SYSROOT/lib/libbrotlicommon.a $ROOT/cmake/stubs/extra_stubs.o"
+    --use-port=sqlite3 --use-port=bzip2 \
+    $ROOT/cmake/stubs/extra_stubs.o"
 else
-  GPU_FLAGS="-sOFFSCREENCANVAS_SUPPORT=1 -sOFFSCREENCANVASES_TO_PTHREAD=#canvas"
+  # $GL: emscripten 6 asserts at startup that OFFSCREENCANVAS_SUPPORT has the GL
+  # library linked, which a WebGPU-only build otherwise drops (the canvas
+  # transfer to the render pthread then aborts). Quoted to survive the eval.
+  # --use-port=emdawnwebgpu: the WebGPU bindings (wgpuCreateInstance, ...). The
+  # gpu module compiles with the port, but nothing puts it on CMake's link line,
+  # and without it the backend aborts at startup on a missing function.
+  GPU_FLAGS="-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE='\$GL' --use-port=emdawnwebgpu \
+    -sOFFSCREENCANVAS_SUPPORT=1 -sOFFSCREENCANVASES_TO_PTHREAD=#canvas"
 fi
 
+# CPython's archive carries its own expat (build_python.sh folds pyexpat's
+# objects in) and OpenImageIO pulls the standalone libexpat: the first
+# definition is taken, as in link_blender_headless.sh.
 WEB_FLAGS="-pthread \
+  -Wl,--allow-multiple-definition \
   -sEXIT_RUNTIME=0 -g2 \
-  -O1 \
+  $LINK_OPT \
   -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=1073741824 -sMAXIMUM_MEMORY=4294967296 \
   -sSTACK_SIZE=16777216 -sDEFAULT_PTHREAD_STACK_SIZE=4194304 \
   -sPTHREAD_POOL_SIZE=32 -sPTHREAD_POOL_SIZE_STRICT=0 \
@@ -168,10 +167,15 @@ else
 fi
 
 echo ">> relinking blender → $OUT/blender.js (release, no preload)"
-( cd "$BUILD" && eval "$cmd $WEB_FLAGS" )
+( cd "$BLENDER_BUILD" && eval "$cmd $EXTRA_LINK_LIBS $WEB_FLAGS" )
 
-echo ">> blender.wasm.zst (zstd --ultra -21 -T0)"
-zstd -f --ultra -21 -T0 "$OUT/blender.wasm" -o "$OUT/blender.wasm.zst"
+if [ "${OPTIMIZE:-0}" = 1 ]; then
+  bash "$ROOT/scripts/optimize_wasm.sh" "$OUT/blender.wasm"
+  rm -f "$OUT/blender.unopt.wasm"
+fi
+
+log "blender.wasm.zst (zstd --ultra -$ZSTD_LEVEL -T0)"
+zstd -f --ultra -"$ZSTD_LEVEL" -T0 "$OUT/blender.wasm" -o "$OUT/blender.wasm.zst"
 rm -f "$OUT/blender.wasm"
 
 if [ "$BLENDER_GPU" = gl ]; then

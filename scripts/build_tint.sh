@@ -8,11 +8,27 @@ source "$(dirname "$0")/dep_common.sh"
 
 DAWN_REV="${DAWN_REV:-31e25af254ab572c77054edec4946d2244e184dd}"
 
+# retry <cmd...>: googlesource drops long transfers now and then.
+retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    "$@" && return 0
+    log "attempt $attempt failed: $*; retrying in $((attempt * 20))s"
+    sleep $((attempt * 20))
+  done
+  return 1
+}
+
 cd "$SRC"
-if [ ! -d "$SRC/dawn" ]; then
-  log "cloning dawn (shallow) @ $DAWN_REV"
-  git clone https://dawn.googlesource.com/dawn "$SRC/dawn"
-  ( cd "$SRC/dawn" && git fetch --depth 1 origin "$DAWN_REV" && git checkout -q FETCH_HEAD )
+# Only the pinned commit, never the history: a full clone of Dawn is a very
+# long transfer. A checkout that never reached its commit is started over.
+if ! git -C "$SRC/dawn" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+  log "fetching dawn @ $DAWN_REV (depth 1)"
+  rm -rf "$SRC/dawn"
+  git init -q "$SRC/dawn"
+  git -C "$SRC/dawn" remote add origin https://dawn.googlesource.com/dawn
+  retry git -C "$SRC/dawn" fetch --depth 1 origin "$DAWN_REV"
+  git -C "$SRC/dawn" checkout -q FETCH_HEAD
 fi
 cd "$SRC/dawn"
 
@@ -31,7 +47,7 @@ fi
 # interrupted first fetch leaves empty dirs that would skip a needed re-fetch.
 if [ ! -f "$SRC/dawn/third_party/abseil-cpp/CMakeLists.txt" ]; then
   log "fetching Dawn dependencies (abseil, spirv-tools, spirv-headers, ...)"
-  python3 tools/fetch_dawn_dependencies.py
+  retry python3 tools/fetch_dawn_dependencies.py
 fi
 
 b="$BLD/tint"

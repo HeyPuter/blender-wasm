@@ -1,0 +1,93 @@
+// Blender editing a real asset in a three.js scene (StackBlitz: open this folder,
+// or https://stackblitz.com/github/knervous/blender-wasm/tree/master/demos/playground/three-stackblitz).
+// three.js loads Babylon's aerobatic plane with its textures; Blender
+// (WebAssembly, in a worker) takes it into one project with this scene and
+// turns it into a V formation with its Array and Mirror modifiers. The
+// @knervous/blender-web-editor HUD docks on the right: edit in three.js, run
+// Python or RNA calls in Blender, or swap to Blender's own UI and back.
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { TransformControls } from "three/addons/controls/TransformControls.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { mountEditor } from "@knervous/blender-web-editor";
+import { threeViewport } from "@knervous/blender-web-editor/three";
+
+// Blender's runtime (the core package's runtime/, served by a CDN).
+const RUNTIME = "https://cdn.jsdelivr.net/npm/@knervous/blender-web@0.0.5/runtime/";
+// The hosted Blender UI (the fork's `./build.sh web`) behind the "Blender UI" button.
+const BLENDER_UI = "https://blender-web-ui.pcj174.workers.dev/";
+const PLANE = "https://assets.babylonjs.com/meshes/aerobatic_plane.glb";
+
+// Blender's side: the plane at full size, airborne, then copied into a V.
+const FORMATION = `
+import bpy
+for name in ("Cube", "Light", "Camera"):
+    bpy.data.objects.remove(bpy.data.objects[name])
+plane = next(o for o in bpy.data.objects if o.type == "MESH")
+root = plane
+while root.parent:
+    root = root.parent
+root.scale *= 20               # the asset is a 30 cm model
+root.location.z = 4
+row = plane.modifiers.new("formation", "ARRAY")
+row.count = 3
+row.relative_offset_displace = (0.85, 0.9, 0)   # out along the wing, back along the fuselage
+plane.modifiers.new("wingmen", "MIRROR").use_axis = (True, False, False)
+plane.select_set(True)            # selected when you swap to Blender's UI
+bpy.context.view_layer.objects.active = plane
+`;
+
+// The plane's colour is a KHR_materials_pbrSpecularGlossiness diffuse texture,
+// which three.js no longer reads; map it onto the standard material.
+class PlaneLoader extends GLTFLoader {
+  constructor(manager) {
+    super(manager);
+    this.register((parser) => ({
+      name: "KHR_materials_pbrSpecularGlossiness",
+      extendMaterialParams(index, params) {
+        const specGloss = parser.json.materials[index].extensions?.KHR_materials_pbrSpecularGlossiness;
+        return specGloss?.diffuseTexture
+          ? parser.assignTexture(params, "map", specGloss.diffuseTexture, THREE.SRGBColorSpace)
+          : Promise.resolve();
+      },
+    }));
+  }
+}
+
+// The app's scene: renderer, camera, lighting and render loop stay the app's.
+const stage = document.getElementById("stage");
+const canvas = document.getElementById("view");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x2b2b33);
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+scene.add(new THREE.GridHelper(60, 60, 0x55555f, 0x3a3a42));
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+camera.position.set(-17.5, 15, 18.5);
+const orbit = new OrbitControls(camera, canvas);
+orbit.target.set(-3, 3.5, 0);
+orbit.update();
+const resize = () => {
+  renderer.setSize(stage.clientWidth, stage.clientHeight, false);
+  camera.aspect = stage.clientWidth / stage.clientHeight;
+  camera.updateProjectionMatrix();
+};
+new ResizeObserver(resize).observe(stage);
+renderer.setAnimationLoop(() => renderer.render(scene, camera));
+
+// The editor over it (single-threaded Blender here: the page isn't isolated).
+const viewport = threeViewport(THREE, scene, camera, canvas, { TransformControls, GLTFLoader: PlaneLoader, GLTFExporter, orbit });
+const editor = mountEditor({ container: stage, viewport, runtimeUrl: RUNTIME, blenderUi: BLENDER_UI });
+await editor.ready;
+
+// A real asset, loaded by three.js with its textures, then adopted into the project.
+await viewport.openUntracked(new File([await (await fetch(PLANE)).arrayBuffer()], "aerobatic_plane.glb"));
+viewport.adoptUntracked();
+await editor.project.sync();
+
+// Blender's modifiers on it. Only the new geometry comes back; three.js keeps its textured material.
+await editor.project.sync({ script: FORMATION });
+editor.refresh();

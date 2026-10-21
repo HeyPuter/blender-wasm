@@ -12,53 +12,25 @@
 # pipeline enters the WebGPU backend with device_ != null. EEVEE pixels need the
 # rest of the backend; this unblocks all of that by making it browser-verifiable.
 set -euo pipefail
-ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-export PATH="$ROOT/emsdk/upstream/emscripten:$PATH"
-BUILD="$ROOT/build-blender"
-WEB="$ROOT/web"
-SYSROOT="$ROOT/wasm-sysroot"
-STAGE="$ROOT/web/blender_assets"
+source "$(dirname "${BASH_SOURCE[0]}")/link_common.sh"
+WEB="${OUT:-$ROOT/web}"
+STAGE="$WEB/blender_assets"
+LINK_OPT="${LINK_OPT:--O1}"
+mkdir -p "$WEB"
 
-# --- stage runtime assets (trim CPython stdlib: drop tests/caches) ----------
-echo ">> staging assets -> $STAGE"
-rm -rf "$STAGE"; mkdir -p "$STAGE/5.3"
-cp -r "$ROOT/blender/scripts"          "$STAGE/5.3/scripts"
-cp -r "$ROOT/blender/release/datafiles" "$STAGE/5.3/datafiles"
-# Cycles' Python add-on lives with its sources, not in scripts/ (CMake installs
-# it); without it the engine is compiled in but cannot be selected.
-if grep -q "^WITH_CYCLES:BOOL=ON" "$BUILD/CMakeCache.txt" 2>/dev/null; then
-  cp -r "$ROOT/blender/intern/cycles/blender/addon" "$STAGE/5.3/scripts/addons_core/cycles"
-  find "$STAGE/5.3/scripts/addons_core/cycles" -name '__pycache__' -type d -prune -exec rm -rf {} +
-fi
-cp -r "$SYSROOT/lib/python3.13" "$STAGE/python3.13"
-# Trim weight not needed at runtime (tests, caches, dev-only modules).
-( cd "$STAGE/python3.13" && rm -rf test tests idlelib lib2to3 turtledemo tkinter \
-    config-3.13-wasm32-emscripten ensurepip \
-    && find . -name '__pycache__' -type d -prune -exec rm -rf {} + )
-# config-3.13-*/: build artifacts incl. a 41MB libpython3.13.a never read at
-# runtime; ensurepip: bundled pip wheel (no pip on wasm). splash_template.xcf
-# is a GIMP source file shipped by accident upstream.
-rm -f "$STAGE/5.3/datafiles/splash_template.xcf"
+# --- stage runtime assets (trimmed CPython stdlib, see link_common.sh) -----
+stage_assets "$STAGE" python3.13
+stage_cycles_addon "$STAGE"
 # OCIO diet: a browser canvas is an sRGB display — drop the P3/Rec.2020/
 # Rec.2100 display definitions and their (multi-MB) AgX cubes, plus the
 # niche Khronos PBR Neutral view. AgX_Base_Rec2020.cube STAYS: the kept
 # False Color view transform samples it. config.ocio is patched in staging
 # only (source tree untouched).
-python3 "$ROOT/scripts/trim_ocio.py" "$STAGE/5.3/datafiles/colormanagement"
-echo ">>   scripts=$(du -shL "$STAGE/5.3/scripts"|cut -f1) datafiles=$(du -shL "$STAGE/5.3/datafiles"|cut -f1) py=$(du -sh "$STAGE/python3.13"|cut -f1)"
+python3 "$ROOT/scripts/trim_ocio.py" "$STAGE/$BLENDER_VERSION_DIR/datafiles/colormanagement"
+precompile_python "$STAGE/$BLENDER_VERSION_DIR/scripts" "$STAGE/python3.13"
+log "scripts=$(du -shL "$STAGE/$BLENDER_VERSION_DIR/scripts"|cut -f1) datafiles=$(du -shL "$STAGE/$BLENDER_VERSION_DIR/datafiles"|cut -f1) py=$(du -sh "$STAGE/python3.13"|cut -f1)"
 
-# --- grab CMake's exact link command for the `blender` target ---------------
-raw=$(ninja -C "$BUILD" -t commands blender | grep -- "-o bin/blender.js" | tail -1)
-# The rule is:  : && <em++ link …> && cd <dir> && cmake -E echo Run:…
-# Take only the em++ link segment: drop the leading ': && ' and everything from
-# the trailing ' && cd …' POST_BUILD chain onward.
-cmd=${raw#*&& }
-cmd=${cmd%% && cd *}
-
-# Retarget output to web/.
-cmd=${cmd/-o bin\/blender.js/-o $WEB/blender.js}
-# Drop node-only filesystem + environment settings (we replace them below).
-cmd=${cmd//-sNODERAWFS=1/}
+cmd=$(cmake_link_cmd "$WEB/blender.js")
 
 # Web runtime flags. PROXY_TO_PTHREAD: Blender's main + worker pthreads run off
 # the browser UI thread. WASMFS keeps the file store in shared memory so the
@@ -79,20 +51,32 @@ cmd=${cmd//-sNODERAWFS=1/}
 # export (static ctors, html5 event callbacks, main-loop ticks) throws
 # SuspendError on the first exception-guarded call. Select readback needs a
 # different design (CPU raycast fallback or cached async readback).
+# CPython's archive carries its own expat (build_python.sh folds pyexpat's
+# objects in) and OpenImageIO pulls the standalone libexpat: the first
+# definition is taken, as in link_blender_headless.sh.
+# $GL: emscripten 6 asserts at startup that OFFSCREENCANVAS_SUPPORT has the GL
+# library linked, which a WebGPU-only build otherwise drops (the canvas
+# transfer to the render pthread then aborts). Quoted to survive the eval.
+# --use-port=emdawnwebgpu: the WebGPU bindings (wgpuCreateInstance, ...). The
+# gpu module compiles with the port, but nothing puts it on CMake's link line,
+# and without it the backend aborts at startup on a missing function.
 WEB_FLAGS="-pthread \
+  -Wl,--allow-multiple-definition \
+  -sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE='\$GL' \
+  --use-port=emdawnwebgpu \
   -sEXIT_RUNTIME=0 -g2 \
-  -O1 \
+  $LINK_OPT \
   -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=1073741824 -sMAXIMUM_MEMORY=4294967296 \
   -sSTACK_SIZE=16777216 -sDEFAULT_PTHREAD_STACK_SIZE=4194304 \
   -sPTHREAD_POOL_SIZE=32 -sPTHREAD_POOL_SIZE_STRICT=0 \
   -sWASMFS -sFORCE_FILESYSTEM=1 \
   -sEXPORTED_RUNTIME_METHODS=FS,callMain,ccall,cwrap,ENV,HEAPU8,HEAPU16,HEAPF32 \
   -sENVIRONMENT=web,worker -sASSERTIONS=1 -sERROR_ON_UNDEFINED_SYMBOLS=0 \
-  --preload-file $STAGE/5.3@/5.3 \
+  --preload-file $STAGE/$BLENDER_VERSION_DIR@/$BLENDER_VERSION_DIR \
   --preload-file $STAGE/python3.13@$SYSROOT/lib/python3.13"
 
 echo ">> relinking blender → $WEB/blender.js (web + WebGPU)"
-( cd "$BUILD" && eval "$cmd $WEB_FLAGS" )
+( cd "$BLENDER_BUILD" && eval "$cmd $EXTRA_LINK_LIBS $WEB_FLAGS" )
 
 ls -la "$WEB"/blender.js "$WEB"/blender.wasm "$WEB"/blender.data 2>&1
 echo ">> done"

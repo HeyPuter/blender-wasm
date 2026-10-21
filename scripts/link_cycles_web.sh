@@ -4,8 +4,7 @@
 # in a browser. We reuse CMake's exact object/library link line (so we never
 # drift from the build) and append the web settings, emitting web/cycles.{js,wasm,data}.
 set -euo pipefail
-ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-export PATH="$ROOT/emsdk/upstream/emscripten:$PATH"
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 BUILD="$ROOT/build-cycles"
 WEB="$ROOT/web"
 

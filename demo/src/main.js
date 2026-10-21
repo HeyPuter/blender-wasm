@@ -12,6 +12,9 @@
  * visit and fed to emscripten via Module.instantiateWasm.
  */
 import { ZSTDDecoder } from "zstddec";
+/* A host page can embed this runtime as an isolated, same-origin editing
+ * surface; see embed.js for the protocol. */
+import { embed, hostFile, onParentRequest, postToParent } from "./embed.js";
 
 /* ---- Splash UI: progress bar + startup console (ported from gecko-wasm's
  * demo/chrome/src/main.ts). ---- */
@@ -84,6 +87,11 @@ function setProgress(p) {
   fillEl.style.width = `${r}%`;
   progressbar.setAttribute("aria-valuenow", String(r));
   percentEl.textContent = `${r}%`;
+  postToParent("progress", {
+    phase: p.phase,
+    percent: r,
+    message: statusEl.textContent,
+  });
 }
 /* Legacy status() shim used elsewhere in this file. */
 const status = (t) => { statusEl.textContent = t; };
@@ -104,20 +112,30 @@ function renderDownloads() {
     message: "Downloading Blender",
   });
 }
-/* Stream `url` with progress into `dl[key]`, return the compressed bytes. */
+/* Stream `url` with progress into `dl[key]`, return the compressed bytes. A
+ * file packaged in parts (manifest.parts, for hosts with a per-file size limit)
+ * is fetched part by part and joined. */
 async function fetchZst(url, key) {
-  const r = await fetch(url);
-  if (!r.ok || !r.body) throw new Error(`${url}: HTTP ${r.status}`);
-  dl[key].total = Number(r.headers.get("Content-Length")) || 0;
-  const reader = r.body.getReader();
+  const urls = manifest.parts?.[url] ?? [url];
   const chunks = [];
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    dl[key].loaded += value.byteLength;
-    renderDownloads();
+  for (const part of urls) {
+    const r = await fetch(part);
+    if (!r.ok || !r.body) throw new Error(`${part}: HTTP ${r.status}`);
+    if (urls.length === 1) dl[key].total = Number(r.headers.get("Content-Length")) || 0;
+    else dl[key].total = manifest.partBytes?.[url] ?? 0;
+    const reader = r.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      dl[key].loaded += value.byteLength;
+      renderDownloads();
+    }
   }
+  return joinChunks(chunks, key);
+}
+
+function joinChunks(chunks, key) {
   if (!dl[key].total) dl[key].total = dl[key].loaded;
   renderDownloads();
   const out = new Uint8Array(dl[key].loaded);
@@ -315,7 +333,17 @@ async function probeGpu() {
 
 /* Kick the probe off immediately and reflect it in the UI as soon as it lands. */
 gpuAck.addEventListener("change", refreshStartGate);
-probeGpu().then(applyGpuStatus).catch(() => {});
+const gpuProbePromise = probeGpu().then((result) => {
+  applyGpuStatus(result);
+  return result;
+}).catch((reason) => {
+  const result = {
+    ok: false, software: false, fatal: true, desc: "",
+    message: `WebGPU probe failed (${reason instanceof Error ? reason.message : String(reason)}). Blender cannot start.`,
+  };
+  applyGpuStatus(result);
+  return result;
+});
 
 /* ---- Download the asset tar + engine wasm CONCURRENTLY (one combined
  * progress bar), then zstd-decompress both. `assetProvider` (the zero-copy tar
@@ -415,6 +443,7 @@ function loadWinkWgslCache() {
 
 /* ---- boot ---- */
 window.__BGUI__ = { booted: false, device: false, window: false };
+let resolveEmbedSave = null;
 const scan = (t) => {
   if (t.includes("WEBGPU_CONTEXT") && t.includes("real device acquired")) window.__BGUI__.device = true;
   /* First frame that actually drew something (not the black startup clear):
@@ -423,6 +452,12 @@ const scan = (t) => {
     window.__BGUI__.window = true;
     splashEl.classList.add("done");
     canvas.classList.add("ready");
+    postToParent("ready");
+  }
+  if (resolveEmbedSave && /Saved.*\.blend/i.test(t)) {
+    const resolve = resolveEmbedSave;
+    resolveEmbedSave = null;
+    resolve();
   }
 };
 const canvas = document.getElementById("canvas");
@@ -491,6 +526,84 @@ window.addEventListener(
   },
   { capture: true },
 );
+
+/* Embed bridge: save the live editor state to the staged session .blend, then
+ * transfer a snapshot to the parent, which decides what to do with it
+ * (validate, export, version). */
+async function snapshotForParent() {
+  if (!window.Module?.FS) throw new Error("Blender is not running");
+  // Builds with host hooks save straight to the path; older ones take Ctrl+S below.
+  const direct = hostFile("save", embed.sessionPath);
+  if (direct) {
+    await direct;
+    const bytes = window.Module.FS.readFile(embed.sessionPath);
+    const snapshot = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    postToParent("snapshot", { session: snapshot }, [snapshot]);
+    return;
+  }
+  if (!embed.sessionUrl) throw new Error("No embedded session is open");
+  canvas.focus();
+  // WasmFS reports mtime as a number of seconds (the JS FS as a Date), and a
+  // save inside the same second keeps it, so size is part of the stamp too.
+  const fileStamp = () => {
+    const stat = window.Module.FS.stat(embed.sessionPath);
+    const mtime = stat.mtime instanceof Date ? stat.mtime.getTime() : Number(stat.mtime);
+    return `${mtime}:${stat.size}`;
+  };
+  const previousStamp = fileStamp();
+  const saved = new Promise((resolve, reject) => {
+    let poll;
+    const finish = () => {
+      clearTimeout(timer);
+      clearInterval(poll);
+      resolveEmbedSave = null;
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      clearInterval(poll);
+      if (resolveEmbedSave) resolveEmbedSave = null;
+      reject(new Error("Blender did not finish saving within 30 seconds"));
+    }, 30000);
+    resolveEmbedSave = finish;
+    poll = setInterval(() => {
+      try {
+        if (fileStamp() !== previousStamp) finish();
+      } catch (e) { /* Blender may briefly replace the file while saving. */ }
+    }, 100);
+  });
+  // Ctrl+S, the way Blender takes it: keys are read on the canvas, routed to
+  // the window under the pointer (so the pointer has to have been seen there),
+  // and Ctrl counts only once its own key event arrives. A bare S starts Scale.
+  const box = canvas.getBoundingClientRect();
+  for (const type of ["pointermove", "mousemove"]) {
+    canvas.dispatchEvent(new MouseEvent(type, {
+      clientX: box.left + box.width / 2, clientY: box.top + box.height / 2, bubbles: true,
+    }));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const key = (type, init) => canvas.dispatchEvent(new KeyboardEvent(type, { bubbles: true, cancelable: true, ...init }));
+  key("keydown", { key: "Control", code: "ControlLeft", keyCode: 17, which: 17, ctrlKey: true });
+  key("keydown", { key: "s", code: "KeyS", keyCode: 83, which: 83, ctrlKey: true });
+  key("keyup", { key: "s", code: "KeyS", keyCode: 83, which: 83, ctrlKey: true });
+  key("keyup", { key: "Control", code: "ControlLeft", keyCode: 17, which: 17, ctrlKey: false });
+  await saved;
+  const bytes = window.Module.FS.readFile(embed.sessionPath);
+  const snapshot = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  postToParent("snapshot", { session: snapshot }, [snapshot]);
+}
+
+/* Open a .blend the parent hands over, without reloading (a swap back into the UI). */
+async function openFromParent({ session }) {
+  if (!window.Module?.FS) throw new Error("Blender is not running");
+  if (!(session instanceof ArrayBuffer)) throw new Error("blender-embed-open needs a session ArrayBuffer");
+  window.Module.FS.writeFile(embed.sessionPath, new Uint8Array(session));
+  const opened = hostFile("load", embed.sessionPath);
+  if (!opened) throw new Error("This Blender build cannot open files on request; reload it with ?session=");
+  await opened;
+  postToParent("opened");
+}
+
+onParentRequest({ save: snapshotForParent, open: openFromParent });
 
 /* ---- File ▸ Open hijack: a REAL, lazy mount (no copying) of a folder the
  * user picks on their machine. Blender's wm_open_mainfile invoke (wasm build)
@@ -795,27 +908,69 @@ window.__blenderFileOpenHook = async () => {
   }
 };
 
+/* First run on an origin: Blender finds no preferences in OPFS and opens its
+ * Quick Setup splash, which takes no input in this build (and an embedded
+ * editing surface wants no splash at all). Seed default preferences, with the
+ * splash off, when none exist yet; Blender upgrades them to its version on
+ * load, and the user's own changes replace them from then on. */
+async function seedPreferences() {
+  try {
+    let dir = await navigator.storage.getDirectory();
+    for (const name of ["home", ".config", "blender", "5.3", "config"]) {
+      dir = await dir.getDirectoryHandle(name, { create: true });
+    }
+    try {
+      await dir.getFileHandle("userpref.blend");
+      return; // the user's own (or an earlier seed)
+    } catch (e) { /* none yet */ }
+    const response = await fetch("default-userpref.blend");
+    if (!response.ok) return;
+    const writable = await (await dir.getFileHandle("userpref.blend", { create: true })).createWritable();
+    await writable.write(await response.arrayBuffer());
+    await writable.close();
+    log("Seeded default preferences (first run on this origin)");
+  } catch (e) {
+    log("preferences seed: " + e);
+  }
+}
+
 /* ---- Launch: build Module (all the boot wiring) and load blender.js. Gated on
  * the Launch button, which is enabled once both downloads finished above. The
  * WebGPU device itself is acquired on the render pthread (creator.cc bootstrap),
  * so we only sanity-check WebGPU availability here. ---- */
 async function start() {
+  if (window.__BGUI__.booted) return;
+  window.__BGUI__.booted = true;
   /* WebGPU availability + software-renderer state were already probed and
    * surfaced (probeGpu / the Launch gate); a fatal GPU state keeps the button
    * disabled, so reaching here means we're clear to boot. */
   if (gpuStatus && gpuStatus.fatal) {
     console.error(gpuStatus.message.replace(/<[^>]+>/g, ""));
+    window.__BGUI__.booted = false;
     return;
   }
   if (gpuStatus && gpuStatus.software) {
     console.warn("WebGPU is using a SOFTWARE renderer — Blender will be extremely slow.");
   }
   setUiPhase("console");
+  await seedPreferences();
   startBtn.disabled = true;
   startBtn.textContent = "Starting…";
 
+  let sessionBytes = null;
+  if (embed.sessionUrl) {
+    status(`Loading ${embed.id || "session"}…`);
+    const response = await fetch(embed.sessionUrl);
+    if (!response.ok) throw new Error(`Embedded session: HTTP ${response.status}`);
+    sessionBytes = new Uint8Array(await response.arrayBuffer());
+    log(`Session staged: ${embed.id || "scene"} · ${formatBytes(sessionBytes.byteLength)}`);
+  }
+
 window.Module = {
-  arguments: ["--factory-startup", ...(window.__BARGS || [])],
+  // Respect the browser-persisted Blender preferences. Forcing
+  // --factory-startup reopens Quick Setup on every boot; accepting that dialog
+  // replaces the scene and discards the staged session.
+  arguments: [...(sessionBytes ? [embed.sessionPath] : []), ...(window.__BARGS || [])],
   canvas,
   print: (t) => { log(t); scan(t); },
   printErr: (t) => { log("[err] " + t); scan(t); },
@@ -872,6 +1027,14 @@ window.Module = {
     })().catch((e) => log("wgsl cache: " + e)).finally(() => removeRunDependency("wgsl-cache"));
   }],
   onRuntimeInitialized: () => {
+    /* WasmFS native operations are not callable from preRun in this build.
+     * onRuntimeInitialized still precedes callMain(), so the positional
+     * .blend argument sees this file when Blender begins processing argv. */
+    if (sessionBytes) {
+      try { window.Module.FS.mkdir("/tmp"); } catch (e) { /* exists */ }
+      window.Module.FS.writeFile(embed.sessionPath, sessionBytes);
+      log(`Session mounted at ${embed.sessionPath}`);
+    }
     loadWinkWgslCache();
     /* Parent of the local-folder mount points (wm_open_mainfile also creates
      * it wasm-side; this covers sessions where the dialog never opened). */
@@ -893,7 +1056,31 @@ window.Module = {
   document.body.appendChild(s);
 }
 
-startBtn.onclick = () => { void start(); };
+const reportStartFailure = (reason) => {
+  window.__BGUI__.booted = false;
+  const message = reason instanceof Error ? reason.message : String(reason);
+  console.error(message);
+  status(`Failed to start: ${message}`);
+  postToParent("error", { message });
+};
+
+startBtn.onclick = () => { void start().catch(reportStartFailure); };
 /* The button's enabled state is driven by refreshStartGate() (asset readiness +
  * GPU status + software-ack), not toggled unconditionally here. */
 refreshStartGate();
+
+if (embed.enabled) {
+  /* The host page is the launcher UI. Once the runtime and adapter are ready,
+   * enter Blender directly; a software adapter is allowed with a warning so
+   * an embedded session never stalls behind an invisible acknowledgement. */
+  const embeddedGpu = await gpuProbePromise;
+  if (embeddedGpu.software) {
+    gpuAck.checked = true;
+    console.warn("Embedded session is continuing with a software WebGPU adapter.");
+  }
+  if (embeddedGpu.fatal) {
+    reportStartFailure(new Error(embeddedGpu.message.replace(/<[^>]+>/g, "")));
+  } else {
+    await start().catch(reportStartFailure);
+  }
+}

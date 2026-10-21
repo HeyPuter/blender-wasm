@@ -1,0 +1,18 @@
+{
+  "name": "blender-web-three-stackblitz",
+  "private": true,
+  "type": "module",
+  "description": "Blender (WebAssembly) editing a three.js scene through @knervous/blender-web-editor.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@knervous/blender-web": "0.0.5",
+    "@knervous/blender-web-editor": "0.0.2",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "vite": "^8.3.4"
+  }
+}

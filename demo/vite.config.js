@@ -23,5 +23,7 @@ export default defineConfig({
     https: !!process.env.SSL,
   },
   preview: { headers: isolationHeaders },
-  build: { target: "esnext" },
+  // The large precompiled runtime is installed into dist separately. Preserve
+  // it while rebuilding this small launcher shell.
+  build: { target: "esnext", emptyOutDir: false },
 });

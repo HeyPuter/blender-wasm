@@ -1,8 +1,8 @@
 # Blender → WebAssembly build orchestration.
 #
-# Reproducible from scratch:  make all
-# Target MVP: headless Cycles CPU rendering in the browser, then scene
-# loading/manipulation, then GUI (WebGL2). WebGPU backend is out of scope for now.
+# Most people want ./build.sh (node | browser | web), which runs these targets
+# in order with stamps so finished steps are skipped. The targets below are the
+# individual steps it is made of.
 #
 # Emscripten decisions baked in here:
 #   * pthreads enabled            (-pthread, requires COOP/COEP on the web server)
@@ -10,9 +10,12 @@
 #   * NO JSPI                     (avoid -sASYNCIFY/JSPI unless forced)
 #   * OffscreenCanvas             (-sOFFSCREENCANVAS_SUPPORT)
 
+# Recipes source scripts/env.sh, which is bash.
+SHELL         := bash
 ROOT          := $(CURDIR)
-BLENDER_URL   := https://github.com/HeyPuter/blender
-BLENDER_REF   := fe16888d9e1e5eee3070535a221dd9ae2d671a77
+# '?=': build.sh passes BLENDER_URL / BLENDER_REF through from the environment.
+BLENDER_URL   ?= https://github.com/HeyPuter/blender
+BLENDER_REF   ?= fe16888d9e1e5eee3070535a221dd9ae2d671a77
 # NOTE: ':=' (not '?=') so a stale exported EMSDK in the environment cannot
 # point us at the wrong tree. Command-line `make EMSDK=...` still overrides.
 EMSDK         := $(ROOT)/emsdk
@@ -25,26 +28,31 @@ EMXX          := $(EM_BIN)/em++
 EMCMAKE       := $(EM_BIN)/emcmake
 EMMAKE        := $(EM_BIN)/emmake
 EM_TOOLCHAIN  := $(EM_BIN)/cmake/Modules/Platform/Emscripten.cmake
-# `emcmake cmake ...` needs emcc/em++/emcmake on PATH. Sourcing emsdk_env.sh is
-# unreliable when a stale EMSDK is already exported in the environment, so just
-# prepend the toolchain bindir directly (emcc finds node via its own config).
-EM_ENV        := export PATH="$(EM_BIN):$$PATH";
+# Host setup (in-repo emsdk on PATH, GNU tools on macOS, a working
+# DEVELOPER_DIR) is shared with the shell scripts: scripts/env.sh.
+EM_ENV        := export ROOT="$(ROOT)" BLENDER_WASM_EMSDK="$(EMSDK)"; . "$(ROOT)/scripts/env.sh";
 
 # --- layout (keep comments off these lines: trailing spaces leak into values) -
 # SYSROOT      : install prefix for cross-compiled deps
 # DEPS         : dep sources + build trees
 # BUILD_CYCLES : cmake build dir for cycles standalone
 # WEB          : html/js harness + final artifacts
-SYSROOT       := $(ROOT)/wasm-sysroot
-DEPS          := $(ROOT)/deps
+SYSROOT       ?= $(ROOT)/wasm-sysroot
+DEPS          ?= $(ROOT)/deps
 BUILD_CYCLES  := $(ROOT)/build-cycles
+BLENDER_BUILD ?= $(ROOT)/build-blender
 WEB           := $(ROOT)/web
-NPROC         := $(shell nproc)
+NPROC         := $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 # --- common compile flags for every wasm object (deps + blender) -----------
 # Keep these identical across all libraries or linking will fail: pthreads,
 # exceptions and SIMD must agree. SSE4.2 intrinsics are emulated onto wasm SIMD.
-WASM_CFLAGS   := -O2 -pthread -msimd128 -msse4.2 -fexceptions
+# ABI_FLAGS comes from scripts/env.sh via build.sh (THREADS=0 swaps it for the
+# single-threaded ABI); the default is the pthread one.
+ABI_FLAGS     ?= -pthread -fexceptions
+# Extra CMake options for the headless configure (THREADS=0: no TBB, no Cycles).
+HEADLESS_EXTRA ?=
+WASM_CFLAGS   := -O2 -msimd128 -msse4.2 $(ABI_FLAGS)
 WASM_CXXFLAGS := $(WASM_CFLAGS)
 
 .PHONY: all mvp toolchain blender blender-assets deps configure-cycles cycles cycles-web configure-blender blender-web configure-blender-gl blender-gl blender-release-gl verify-blender-webgpu web smoke serve verify verify-render verify-webgpu clean-build print-env
@@ -129,7 +137,7 @@ dep-%: toolchain
 # makes OpenImageIO's simd.h take an x86 SSE-intrinsic path (__m128i) that fails
 # on wasm. Cycles' own kernel files add per-file SIMD flags as needed. Plus the
 # wasm compat shim (uint/ushort).
-WASM_COMPAT := -pthread -fexceptions -include $(ROOT)/cmake/wasm_compat.h
+WASM_COMPAT := $(ABI_FLAGS) -include $(ROOT)/cmake/wasm_compat.h
 
 configure-cycles: toolchain blender deps
 	$(EM_ENV) "$(EMCMAKE)" cmake -S blender -B $(BUILD_CYCLES) -G Ninja \
@@ -156,13 +164,35 @@ cycles-web: cycles
 # ---------------------------------------------------------------------------
 configure-blender: toolchain blender blender-assets deps dep-python dep-numpy
 	bash scripts/build_shader_tool_native.sh   # native codegen tool (wasm one is buggy)
-	$(EM_ENV) "$(EMCMAKE)" cmake -S blender -B build-blender -G Ninja \
+	$(EM_ENV) "$(EMCMAKE)" cmake -S blender -B $(BLENDER_BUILD) -G Ninja \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_PREFIX_PATH="$(SYSROOT)" -DCMAKE_FIND_ROOT_PATH="$(SYSROOT)" \
 		-DCMAKE_C_FLAGS="-pthread -fexceptions $(WASM_COMPAT)" \
 		-DCMAKE_CXX_FLAGS="-pthread -fexceptions $(WASM_COMPAT)" \
 		-DWITH_WEBGPU_BACKEND=ON \
+		-DBLENDER_WASM_SYSROOT="$(SYSROOT)" \
 		-C $(ROOT)/cmake/blender-wasm-cache.cmake
+
+# ---------------------------------------------------------------------------
+# Headless Blender → WASM for Node or a browser worker. No GHOST, no WebGPU,
+# no draw backend: callers drive bpy (glTF import/export, mesh + modifier ops,
+# Cycles CPU bakes), so the in-progress window/render stack is skipped entirely. Reuses the
+# same toolchain, deps, CPython and datafiles as the GUI build. Dir: the shared
+# build-blender (reconfigured in place — a second tree does not fit alongside).
+# ---------------------------------------------------------------------------
+configure-blender-headless: toolchain blender blender-assets deps dep-python
+	bash scripts/build_shader_tool_native.sh
+	$(EM_ENV) "$(EMCMAKE)" cmake -S blender -B $(BLENDER_BUILD) -G Ninja \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_PREFIX_PATH="$(SYSROOT)" -DCMAKE_FIND_ROOT_PATH="$(SYSROOT)" \
+		-DCMAKE_C_FLAGS="$(WASM_COMPAT)" \
+		-DCMAKE_CXX_FLAGS="$(WASM_COMPAT)" \
+		-DWITH_HEADLESS=ON -DWITH_GHOST_WEB=OFF -DWITH_WEBGPU_BACKEND=OFF \
+		-DBLENDER_WASM_SYSROOT="$(SYSROOT)" \
+		-C $(ROOT)/cmake/blender-wasm-headless-cache.cmake $(HEADLESS_EXTRA)
+
+blender-headless: configure-blender-headless
+	$(EM_ENV) ninja -C $(BLENDER_BUILD) blender
 
 # ---------------------------------------------------------------------------
 # Full Blender on its OpenGL backend, running on wink — Mesa's GL on WebGPU

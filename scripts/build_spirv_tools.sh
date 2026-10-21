@@ -18,7 +18,7 @@ SH="$SRC/dawn/third_party/spirv-headers/src"
 [ -d "$ST" ] || { echo "ERROR: build_tint.sh must run first (clones Dawn+deps)"; exit 1; }
 
 # Match Tint's ABI flags (-pthread -msimd128 -fexceptions).
-FLAGS="-O2 -pthread -msimd128 -fexceptions -Wno-error"
+FLAGS="-O2 $ABI_FLAGS -msimd128 -Wno-error"
 b="$BLD/spirv-tools"
 rm -rf "$b"
 log "configuring SPIRV-Tools standalone (emcmake)"

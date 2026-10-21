@@ -1,0 +1,15 @@
+--- a/src/libutil/thread.cpp	2026-10-20 10:44:35
++++ b/src/libutil/thread.cpp	2026-10-20 10:44:35
+@@ -141,6 +141,12 @@
+     {
+         if (nThreads < 0)
+             nThreads = std::max(1, int(threads_default()) - 1);
++#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
++        // WebAssembly without pthreads: no thread can start. With no workers
++        // the pool is always "very busy", so parallel loops run serially and
++        // task sets run their own tasks on the calling thread.
++        nThreads = 0;
++#endif
+         if (!this->isStop && !this->isDone) {
+             int oldNThreads = size();
+             if (oldNThreads
